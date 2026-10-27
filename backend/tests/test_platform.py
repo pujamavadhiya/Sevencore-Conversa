@@ -150,3 +150,36 @@ class SevencoreConversaBackendTests(TestCase):
         attempt.calculate_cost(rate_per_min_inr=3.50)
         # 1.5 * 3.50 = 5.2500 INR
         self.assertEqual(attempt.cost_inr, Decimal("5.2500"))
+
+    def test_knowledge_base_categories(self):
+        from apps.knowledge_base.models import KnowledgeBaseFile
+
+        # 1. Test Text Paste
+        kb_text = KnowledgeBaseFile.objects.create(
+            organization=self.org,
+            agent=self.agent,
+            name="Product Pricing Notes",
+            category="text",
+            raw_text="Sevencore Conversa pricing: Basic plan is ₹4,999/mo with 1,500 calling minutes.",
+            content_summary="Basic plan is ₹4,999/mo with 1,500 calling minutes.",
+            word_count=10,
+            status="attached",
+        )
+        self.assertEqual(kb_text.category, "text")
+        self.assertEqual(kb_text.agent, self.agent)
+
+        # 2. Test Website Scraping Category Entry
+        kb_site = KnowledgeBaseFile.objects.create(
+            organization=self.org,
+            agent=self.agent,
+            name="Sevencore Documentation",
+            category="site",
+            source_url="https://sevencore.ai/docs",
+            raw_text="Enterprise Voice AI documentation and Indian telecom guidelines.",
+            content_summary="Enterprise Voice AI documentation.",
+            word_count=8,
+            status="attached",
+        )
+        self.assertEqual(kb_site.category, "site")
+        self.assertEqual(kb_site.source_url, "https://sevencore.ai/docs")
+        self.assertEqual(self.agent.knowledge_files.count(), 2)

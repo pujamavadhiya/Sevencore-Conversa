@@ -19,6 +19,8 @@ import {
   Sliders,
   HelpCircle,
   Upload,
+  Globe,
+  FileEdit,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { VoiceAgent } from "@/types";
@@ -744,12 +746,41 @@ export default function AgentsPage() {
                             onChange={() => {}} // handled by div click
                             style={{ accentColor: "var(--accent-primary)" }}
                           />
-                          <FileText size={14} color="var(--accent-primary)" />
+                          {kb.category === "site" ? (
+                            <Globe size={14} color="#059669" />
+                          ) : kb.category === "text" ? (
+                            <FileEdit size={14} color="#BE185D" />
+                          ) : (
+                            <FileText size={14} color="var(--accent-primary)" />
+                          )}
                           <div style={{ flex: 1, fontSize: "12px", fontWeight: "600", color: "#0F172A" }}>
                             {kb.name}
+                            {kb.source_url && (
+                              <span style={{ fontSize: "10px", color: "var(--text-muted)", marginLeft: "6px" }}>
+                                ({kb.source_url.slice(0, 30)}...)
+                              </span>
+                            )}
                           </div>
-                          <span className="badge badge-running" style={{ fontSize: "10px" }}>
-                            {kb.file_type}
+                          <span
+                            className="badge"
+                            style={{
+                              fontSize: "10px",
+                              padding: "2px 6px",
+                              background:
+                                kb.category === "site"
+                                  ? "#F0FDF4"
+                                  : kb.category === "text"
+                                  ? "#FDF2F8"
+                                  : "#EEF2FF",
+                              color:
+                                kb.category === "site"
+                                  ? "#047857"
+                                  : kb.category === "text"
+                                  ? "#BE185D"
+                                  : "#4338CA",
+                            }}
+                          >
+                            {kb.category === "site" ? "🌐 Website" : kb.category === "text" ? "📝 Text Note" : "📄 Document"}
                           </span>
                         </div>
                       );
