@@ -1,0 +1,46 @@
+from django.contrib import admin
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+
+from apps.accounts.views import LoginView, LogoutView, CurrentUserView
+from apps.organizations.views import OrganizationViewSet
+from apps.organizations.settings_view import SystemSettingsView
+from apps.agents.views import VoiceAgentViewSet
+from apps.knowledge_base.views import KnowledgeBaseViewSet
+from apps.contacts.views import ContactViewSet, SuppressionEntryViewSet, ContactImportViewSet
+from apps.campaigns.views import CampaignViewSet
+from apps.calls.views import CallAttemptViewSet, TranscriptViewSet
+from apps.calls.webhook import SarvamWebhookView
+from apps.meetings.views import MeetingViewSet
+from apps.analytics.views import DashboardSummaryView, AnalyticsDetailView
+
+router = DefaultRouter()
+router.register(r"organizations", OrganizationViewSet, basename="organization")
+router.register(r"agents", VoiceAgentViewSet, basename="agent")
+router.register(r"knowledge-base", KnowledgeBaseViewSet, basename="knowledge-base")
+router.register(r"contacts", ContactViewSet, basename="contact")
+router.register(r"suppressions", SuppressionEntryViewSet, basename="suppression")
+router.register(r"imports", ContactImportViewSet, basename="import")
+router.register(r"campaigns", CampaignViewSet, basename="campaign")
+router.register(r"calls", CallAttemptViewSet, basename="call")
+router.register(r"transcripts", TranscriptViewSet, basename="transcript")
+router.register(r"meetings", MeetingViewSet, basename="meeting")
+
+urlpatterns = [
+    path("admin/", admin.site.urls),
+    
+    # REST API v1
+    path("api/v1/auth/login/", LoginView.as_view(), name="auth-login"),
+    path("api/v1/auth/logout/", LogoutView.as_view(), name="auth-logout"),
+    path("api/v1/auth/me/", CurrentUserView.as_view(), name="auth-me"),
+    
+    path("api/v1/dashboard/", DashboardSummaryView.as_view(), name="dashboard-summary"),
+    path("api/v1/analytics/", AnalyticsDetailView.as_view(), name="analytics-detail"),
+    path("api/v1/settings/", SystemSettingsView.as_view(), name="system-settings"),
+    
+    # Sarvam Webhook receiver
+    path("api/v1/webhooks/sarvam/", SarvamWebhookView.as_view(), name="sarvam-webhook"),
+    
+    # Model router routes
+    path("api/v1/", include(router.urls)),
+]
