@@ -63,6 +63,7 @@ export interface Campaign {
   status_display: string;
   calling_window_start: string;
   calling_window_end: string;
+  scheduled_start_time?: string | null;
   calls_per_second: number;
   max_retries: number;
   is_confirmed: boolean;
@@ -184,4 +185,37 @@ export interface ProviderStatus {
   agent_phone_number_configured: boolean;
   rented_number: string;
   message?: string;
+}
+
+export interface HistoryCampaignSummary {
+  campaign_id: string;
+  name: string;
+  agent_id?: string;
+  start_timestamp?: string;
+  end_timestamp?: string;
+  total_attempts: number;
+  unique_users: number;
+  connected: number;
+  successful: number;
+  followups: number;
+  last_call_at?: string;
+}
+
+export interface HistoryCallItem {
+  attempt_id: string;
+  call_type: "single" | "campaign";
+  campaign_id?: string;
+  user_identifier?: string;
+  external_ref?: string;
+  user_contact_masked?: string;
+  connectivity_status?: string;
+  completion_status?: string;
+  disposition?: "success" | "retrying" | "followup" | "not_connected" | "unknown";
+  followup_reason?: string;
+  call_outcome?: string;
+  duration?: number;
+  retry_attempt?: number;
+  executed_at: string;
+  transcript_status: "not_applicable" | "pending" | "ready" | "unparsed" | "unavailable";
+  source: "webhook" | "sync";
 }

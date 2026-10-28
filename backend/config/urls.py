@@ -11,6 +11,14 @@ from apps.contacts.views import ContactViewSet, SuppressionEntryViewSet, Contact
 from apps.campaigns.views import CampaignViewSet
 from apps.calls.views import CallAttemptViewSet, TranscriptViewSet
 from apps.calls.webhook import SarvamWebhookView
+from apps.calls.history_views import (
+    HistoryCampaignsView,
+    HistoryCampaignCallsView,
+    HistoryCampaignUserAttemptsView,
+    HistorySingleCallsView,
+    HistoryCallDetailView,
+    HistoryCallTranscriptView,
+)
 from apps.meetings.views import MeetingViewSet
 from apps.analytics.views import DashboardSummaryView, AnalyticsDetailView
 
@@ -40,6 +48,14 @@ urlpatterns = [
     
     # Sarvam Webhook receiver
     path("api/v1/webhooks/sarvam/", SarvamWebhookView.as_view(), name="sarvam-webhook"),
+
+    # Separated History & Transcript Pipeline API
+    path("api/v1/history/campaigns/", HistoryCampaignsView.as_view(), name="history-campaigns"),
+    path("api/v1/history/campaigns/<str:campaign_id>/calls/", HistoryCampaignCallsView.as_view(), name="history-campaign-calls"),
+    path("api/v1/history/campaigns/<str:campaign_id>/users/<str:user_identifier>/", HistoryCampaignUserAttemptsView.as_view(), name="history-campaign-user-attempts"),
+    path("api/v1/history/single-calls/", HistorySingleCallsView.as_view(), name="history-single-calls"),
+    path("api/v1/history/calls/<str:attempt_id>/", HistoryCallDetailView.as_view(), name="history-call-detail"),
+    path("api/v1/history/calls/<str:attempt_id>/transcript/", HistoryCallTranscriptView.as_view(), name="history-call-transcript"),
     
     # Model router routes
     path("api/v1/", include(router.urls)),

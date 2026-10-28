@@ -30,6 +30,13 @@ class SarvamWebhookView(APIView):
 
         logger.info("Received Sarvam webhook for attempt_id: %s (internal_id: %s)", sarvam_attempt_id, internal_call_attempt_id)
 
+        # Ingest into unified separated history pipeline
+        try:
+            from sarvam_history import ingest_webhook
+            ingest_webhook(payload)
+        except Exception as exc:
+            logger.warning("History ingest_webhook exception: %s", exc)
+
         # Correlate CallAttempt
         attempt = None
         if internal_call_attempt_id:

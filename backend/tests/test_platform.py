@@ -242,3 +242,160 @@ class SevencoreConversaBackendTests(TestCase):
         status_succ, reason_succ = CampaignExecutionEngine.classify_call_outcome(payload_success)
         self.assertEqual(status_succ, "success")
         self.assertIsNone(reason_succ)
+
+    def test_sarvam_history_pipeline_and_endpoints(self):
+        from sarvam_history import ingest_webhook, register_campaign
+        from rest_framework.test import APIClient
+
+        client = APIClient()
+
+        # 1. Register a test campaign in history
+        camp_id = "camp_hist_test_1"
+        register_campaign(
+            campaign_id=camp_id,
+            name="Q3 Product Recall Campaign",
+            agent_id="agent_rec_001",
+            start_iso="2026-10-28T10:00:00Z",
+            end_iso="2026-10-28T18:00:00Z",
+        )
+
+        # 2. Ingest campaign call webhook
+        camp_webhook = {
+            "attempt_id": "att_camp_991",
+            "interaction_id": "ix_camp_991",
+            "campaign_id": camp_id,
+            "user_identifier": "usr_vikram_42",
+            "to_number": "+919876543210",
+            "status": "completed",
+            "disposition": "completed",
+            "duration": 48.5,
+            "agent_id": "agent_rec_001",
+            "agent_version": 1,
+            "final_agent_variables": {"call_outcome": "success"},
+        }
+        ingest_webhook(camp_webhook)
+
+        # 3. Ingest single call webhook
+        single_webhook = {
+            "attempt_id": "att_single_881",
+            "interaction_id": "ix_single_881",
+            "phone": "+919123456789",
+            "status": "completed",
+            "disposition": "completed",
+            "duration": 22.0,
+            "app_id": "app_instant_1",
+            "app_version": 1,
+        }
+        ingest_webhook(single_webhook)
+
+        # Verify campaigns API
+        resp_camps = client.get("/api/v1/history/campaigns/")
+        self.assertEqual(resp_camps.status_code, 200)
+        camps_data = resp_camps.json()
+        matching = [c for c in camps_data if c["campaign_id"] == camp_id]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]["name"], "Q3 Product Recall Campaign")
+        self.assertEqual(matching[0]["total_attempts"], 1)
+
+        # Verify campaign calls drilldown API
+        resp_camp_calls = client.get(f"/api/v1/history/campaigns/{camp_id}/calls/")
+        self.assertEqual(resp_camp_calls.status_code, 200)
+        camp_calls = resp_camp_calls.json()
+        self.assertEqual(camp_calls["total"], 1)
+        self.assertEqual(len(camp_calls["items"]), 1)
+        self.assertEqual(camp_calls["items"][0]["attempt_id"], "att_camp_991")
+        self.assertEqual(camp_calls["items"][0]["user_identifier"], "usr_vikram_42")
+
+        # Verify user attempts in campaign
+        resp_user_attempts = client.get(f"/api/v1/history/campaigns/{camp_id}/users/usr_vikram_42/")
+        self.assertEqual(resp_user_attempts.status_code, 200)
+        user_calls = resp_user_attempts.json()
+        self.assertEqual(user_calls["total"], 1)
+        self.assertEqual(user_calls["items"][0]["attempt_id"], "att_camp_991")
+
+        # Verify single calls API
+        resp_single = client.get("/api/v1/history/single-calls/")
+        self.assertEqual(resp_single.status_code, 200)
+        single_calls = resp_single.json()
+        self.assertGreaterEqual(single_calls["total"], 1)
+        single_matching = [c for c in single_calls["items"] if c["attempt_id"] == "att_single_881"]
+        self.assertEqual(len(single_matching), 1)
+        self.assertEqual(single_matching[0]["call_type"], "single")
+
+        # Verify single call detail
+        resp_detail = client.get("/api/v1/history/calls/att_single_881/")
+        self.assertEqual(resp_detail.status_code, 200)
+        detail = resp_detail.json()
+        self.assertEqual(detail["attempt_id"], "att_single_881")
+
+    def test_scheduled_campaign_workflow(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+
+        # 1. Create a campaign with scheduled_start_time in future
+        future_time = timezone.now() + datetime.timedelta(hours=2)
+        camp = Campaign.objects.create(
+            organization=self.org,
+            name="Scheduled VIP Outreach",
+            agent=self.agent,
+            scheduled_start_time=future_time,
+            calling_window_start=datetime.time(9, 0),
+            calling_window_end=datetime.time(20, 0),
+        )
+        CampaignContact.objects.create(campaign=camp, contact=self.contact, status="pending")
+
+        # 2. Launch with confirm=True (should move to status='scheduled' instead of running)
+        resp_launch = client.post(f"/api/v1/campaigns/{camp.id}/launch/", {"confirm": True})
+        self.assertEqual(resp_launch.status_code, 200)
+        self.assertEqual(resp_launch.json()["status"], "scheduled")
+
+        camp.refresh_from_db()
+        self.assertEqual(camp.status, "scheduled")
+
+        # 3. Test force-start now
+        resp_start_now = client.post(f"/api/v1/campaigns/{camp.id}/start_now/", {"bypass_hours": True})
+        self.assertEqual(resp_start_now.status_code, 200)
+        self.assertTrue(resp_start_now.json().get("success"))
+
+        camp.refresh_from_db()
+        self.assertIn(camp.status, ["running", "completed"])
+
+    def test_edit_campaign_and_add_contacts(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+
+        # 1. Create a draft campaign
+        camp = Campaign.objects.create(
+            organization=self.org,
+            name="Draft Campaign For Editing",
+            agent=self.agent,
+            calling_window_start=datetime.time(9, 0),
+            calling_window_end=datetime.time(20, 0),
+            status="draft",
+        )
+
+        # 2. Edit campaign via PATCH
+        resp_patch = client.patch(f"/api/v1/campaigns/{camp.id}/", {
+            "name": "Updated Campaign Title",
+            "calls_per_second": 4,
+            "max_retries": 3,
+        })
+        self.assertEqual(resp_patch.status_code, 200)
+        camp.refresh_from_db()
+        self.assertEqual(camp.name, "Updated Campaign Title")
+        self.assertEqual(camp.calls_per_second, 4)
+        self.assertEqual(camp.max_retries, 3)
+
+        # 3. Add raw contacts to the campaign
+        resp_add = client.post(f"/api/v1/campaigns/{camp.id}/add_contacts/", {
+            "raw_contacts": [
+                {"name": "Ananya Direct", "phone_number": "+919876543211", "company": "Direct Corp"},
+                {"name": "Rajesh Direct", "phone_number": "9123456780"},
+            ]
+        }, format="json")
+        self.assertEqual(resp_add.status_code, 200)
+        self.assertEqual(resp_add.json()["added_count"], 2)
+
+        camp.refresh_from_db()
+        self.assertEqual(camp.total_contacts, 2)
+        self.assertGreater(camp.estimated_cost_inr, 0)

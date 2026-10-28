@@ -15,14 +15,68 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         org = Organization.objects.first()
-        serializer.save(organization=org)
+        camp = serializer.save(organization=org)
+        try:
+            from sarvam_history import register_campaign
+            register_campaign(
+                campaign_id=str(camp.id),
+                name=camp.name,
+                agent_id=str(camp.agent_id),
+                start_iso=camp.scheduled_start_time.isoformat() if camp.scheduled_start_time else None,
+            )
+        except Exception:
+            pass
+
+    def perform_update(self, serializer):
+        camp = serializer.save()
+        try:
+            from sarvam_history import register_campaign
+            register_campaign(
+                campaign_id=str(camp.id),
+                name=camp.name,
+                agent_id=str(camp.agent_id),
+                start_iso=camp.scheduled_start_time.isoformat() if camp.scheduled_start_time else None,
+            )
+        except Exception:
+            pass
 
     @action(detail=True, methods=["post"])
     def add_contacts(self, request, pk=None):
-        """Adds selected contacts or all eligible contacts to this campaign."""
+        """
+        Adds selected contacts or newly pasted contacts to this campaign.
+        Supports:
+          - contact_ids: list of existing Contact IDs
+          - raw_contacts: list of {"name": "...", "phone_number": "...", "company": "..."}
+          - add_all: boolean
+        """
         campaign = self.get_object()
-        contact_ids = request.data.get("contact_ids", [])
+        contact_ids = list(request.data.get("contact_ids", []))
+        raw_contacts = request.data.get("raw_contacts", [])
         add_all = request.data.get("add_all", False)
+
+        from apps.contacts.models import Contact
+        from apps.contacts.importer import validate_indian_mobile
+
+        if raw_contacts and isinstance(raw_contacts, list):
+            for rc in raw_contacts:
+                p_raw = rc.get("phone_number") or rc.get("phone") or ""
+                if not p_raw:
+                    continue
+                valid, normalized = validate_indian_mobile(str(p_raw))
+                if not valid:
+                    continue
+                c_obj, _ = Contact.objects.update_or_create(
+                    organization=campaign.organization,
+                    phone_number=normalized,
+                    defaults={
+                        "name": rc.get("name") or "Contact",
+                        "company": rc.get("company", ""),
+                        "email": rc.get("email", ""),
+                        "has_consent": True,
+                    }
+                )
+                if c_obj.id not in contact_ids:
+                    contact_ids.append(c_obj.id)
 
         if add_all:
             contacts = Contact.objects.filter(organization=campaign.organization, is_opted_out=False)
@@ -51,6 +105,53 @@ class CampaignViewSet(viewsets.ModelViewSet):
             "total_contacts": total_audience,
             "estimated_cost_inr": campaign.estimated_cost_inr,
         })
+
+    @action(detail=True, methods=["post"])
+    def upload_sheet(self, request, pk=None):
+        """Uploads and imports a CSV/Excel sheet directly into this campaign."""
+        campaign = self.get_object()
+        uploaded_file = request.FILES.get("file")
+        if not uploaded_file:
+            return Response({"error": "No file uploaded"}, status=status.HTTP_400_BAD_REQUEST)
+
+        from apps.contacts.importer import execute_import, parse_contacts_file, validate_indian_mobile
+        try:
+            audit = execute_import(campaign.organization, uploaded_file, uploaded_file.name)
+            uploaded_file.seek(0)
+            rows = parse_contacts_file(uploaded_file, uploaded_file.name)
+            phones = []
+            for r in rows:
+                p_raw = r.get("phone") or r.get("phone_number") or r.get("mobile") or r.get("contact_no") or ""
+                v, norm = validate_indian_mobile(p_raw)
+                if v:
+                    phones.append(norm)
+
+            contacts = Contact.objects.filter(organization=campaign.organization, phone_number__in=phones, is_opted_out=False)
+            added = 0
+            for c in contacts:
+                _, created = CampaignContact.objects.get_or_create(
+                    campaign=campaign,
+                    contact=c,
+                    defaults={"status": "pending"}
+                )
+                if created:
+                    added += 1
+
+            total_audience = campaign.campaign_contacts.count()
+            campaign.total_contacts = total_audience
+            campaign.estimated_cost_inr = round(total_audience * 1.5 * 3.50, 2)
+            campaign.save()
+
+            return Response({
+                "success": True,
+                "imported_count": audit.imported_count,
+                "rejected_count": audit.rejected_count,
+                "added_to_campaign": added,
+                "total_contacts": total_audience,
+                "estimated_cost_inr": campaign.estimated_cost_inr,
+            })
+        except Exception as e:
+            return Response({"error": f"Failed to upload and import sheet: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["get"])
     def preflight_check(self, request, pk=None):
@@ -88,10 +189,14 @@ class CampaignViewSet(viewsets.ModelViewSet):
     def launch(self, request, pk=None):
         """
         Launches the campaign. Requires explicit confirm=True.
+        If scheduled_start_time is set in the future and immediate is not True,
+        transitions campaign to 'scheduled' status without initiating live calls.
         """
+        from django.utils import timezone
         campaign = self.get_object()
         confirm = request.data.get("confirm", False)
         bypass_hours = request.data.get("bypass_hours", False)
+        immediate = request.data.get("immediate", False)
 
         if not confirm:
             return Response(
@@ -100,12 +205,41 @@ class CampaignViewSet(viewsets.ModelViewSet):
             )
 
         campaign.is_confirmed = True
+
+        # Check if campaign has a scheduled start time in the future and not forced immediate
+        now = timezone.now()
+        if not immediate and campaign.scheduled_start_time and campaign.scheduled_start_time > now:
+            campaign.status = "scheduled"
+            campaign.save()
+            return Response({
+                "success": True,
+                "status": "scheduled",
+                "scheduled_start_time": campaign.scheduled_start_time.isoformat(),
+                "message": f"Campaign '{campaign.name}' successfully scheduled to start on {campaign.scheduled_start_time.strftime('%b %d, %Y at %I:%M %p')}.",
+            })
+
         campaign.save()
 
         result = CampaignExecutionEngine.validate_and_start(campaign, bypass_hours_check=bypass_hours)
         if not result.get("success"):
             return Response(result, status=status.HTTP_400_BAD_REQUEST)
 
+        return Response(result)
+
+    @action(detail=True, methods=["post"])
+    def start_now(self, request, pk=None):
+        """
+        Force-starts a scheduled campaign immediately ahead of its scheduled time.
+        """
+        campaign = self.get_object()
+        bypass_hours = request.data.get("bypass_hours", False)
+        campaign.is_confirmed = True
+        campaign.status = "running"
+        campaign.save()
+
+        result = CampaignExecutionEngine.validate_and_start(campaign, bypass_hours_check=bypass_hours)
+        if not result.get("success"):
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
         return Response(result)
 
     @action(detail=True, methods=["post"])
@@ -167,9 +301,22 @@ class CampaignViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=["post"])
     def dispatch_all_due(self, request):
         """
-        Global scheduler endpoint: dispatches eligible follow-ups across all active campaigns.
+        Global scheduler endpoint:
+        1. Checks and triggers any campaigns in 'scheduled' status whose scheduled_start_time <= now.
+        2. Dispatches eligible follow-ups across all active campaigns.
         Can be called by Celery beat, cron, or manual trigger.
         """
+        from django.utils import timezone
+        now = timezone.now()
+
+        # 1. Trigger due scheduled campaigns
+        due_scheduled = Campaign.objects.filter(status="scheduled", scheduled_start_time__lte=now)
+        started_campaigns = []
+        for camp in due_scheduled:
+            res = CampaignExecutionEngine.validate_and_start(camp)
+            started_campaigns.append({"campaign_id": camp.id, "name": camp.name, "result": res})
+
+        # 2. Trigger due follow-ups
         active_campaigns = Campaign.objects.filter(status__in=["running", "completed"])
         total_queued = 0
         campaign_results = []
@@ -181,6 +328,7 @@ class CampaignViewSet(viewsets.ModelViewSet):
 
         return Response({
             "success": True,
+            "scheduled_campaigns_started": started_campaigns,
             "total_queued": total_queued,
             "campaigns": campaign_results,
         })
