@@ -40,6 +40,37 @@ class SarvamBaseClient(ABC):
         pass
 
     @abstractmethod
+    def create_campaign(
+        self,
+        name: str,
+        app_id: str,
+        app_version: int,
+        connection_id: str,
+        from_number: str,
+        webhook_url: str,
+        webhook_secret: str,
+        start_iso: Optional[str] = None,
+        end_iso: Optional[str] = None,
+        attempts_per_second: float = 0.5,
+    ) -> Dict[str, Any]:
+        """
+        Creates a scheduled batch campaign via Sarvam Scheduling API.
+        """
+        pass
+
+    @abstractmethod
+    def stream_cohort(
+        self,
+        campaign_id: str,
+        cohort_name: str,
+        users: list,
+    ) -> Dict[str, Any]:
+        """
+        Streams audience contacts into an existing campaign cohort.
+        """
+        pass
+
+    @abstractmethod
     def health_check(self) -> Dict[str, Any]:
         """
         Validates credentials and connection readiness.

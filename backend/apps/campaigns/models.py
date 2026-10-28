@@ -59,6 +59,11 @@ class Campaign(models.Model):
     calls_answered = models.PositiveIntegerField(default=0)
     calls_completed = models.PositiveIntegerField(default=0)
     calls_failed = models.PositiveIntegerField(default=0)
+
+    # Sarvam Batch Scheduling & Follow-up Tracking
+    sarvam_campaign_id = models.CharField(max_length=128, blank=True, default="", help_text="Sarvam Scheduling API Campaign ID")
+    followups_queued_count = models.PositiveIntegerField(default=0, help_text="Number of follow-up calls queued into follow-up cohorts")
+    followups_completed_count = models.PositiveIntegerField(default=0, help_text="Number of follow-up calls completed")
     
     started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
@@ -81,6 +86,24 @@ class CampaignContact(models.Model):
         ("skipped_optout", "Skipped (Opt-out)"),
     )
 
+    FOLLOWUP_STATUS_CHOICES = (
+        ("pending", "Pending Initial Call"),
+        ("success", "Interacted & Concluded"),
+        ("retrying", "Platform Retrying"),
+        ("followup_pending", "Follow-up Pending"),
+        ("followup_queued", "Follow-up Queued in Cohort"),
+        ("given_up", "Max Follow-ups Given Up"),
+    )
+
+    FOLLOWUP_REASON_CHOICES = (
+        ("no_answer_retries_exhausted", "No Answer (Retries Exhausted)"),
+        ("busy_retries_exhausted", "Busy (Retries Exhausted)"),
+        ("silent_after_pickup_10s", "Answered, Silent 10s After Pickup"),
+        ("silent_mid_conversation_10s", "Silent 10s Mid-Talk"),
+        ("connected_but_no_conclusion", "Connected But No Conclusion"),
+        ("call_failed", "Call Failed"),
+    )
+
     campaign = models.ForeignKey(Campaign, on_delete=models.CASCADE, related_name="campaign_contacts")
     contact = models.ForeignKey(Contact, on_delete=models.CASCADE, related_name="campaign_participations")
     status = models.CharField(max_length=32, choices=STATUS_CHOICES, default="pending")
@@ -88,6 +111,15 @@ class CampaignContact(models.Model):
     last_attempt_at = models.DateTimeField(null=True, blank=True)
     custom_variables = models.JSONField(default=dict, blank=True)
     notes = models.TextField(blank=True, default="")
+
+    # Sarvam Follow-up Orchestration
+    followup_status = models.CharField(max_length=32, choices=FOLLOWUP_STATUS_CHOICES, default="pending")
+    followup_reason = models.CharField(max_length=64, choices=FOLLOWUP_REASON_CHOICES, blank=True, null=True, default=None)
+    followup_round = models.PositiveIntegerField(default=0)
+    followup_eligible_at = models.DateTimeField(null=True, blank=True)
+    previous_conversation = models.TextField(blank=True, default="", help_text="Stored transcript excerpt for context continuity")
+    sarvam_cohort_id = models.CharField(max_length=128, blank=True, default="")
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

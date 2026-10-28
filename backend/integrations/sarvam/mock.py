@@ -191,3 +191,36 @@ class SarvamMockClient(SarvamBaseClient):
             "mode": "mock",
             "message": "Local development mock engine is active. No real calls will be placed.",
         }
+
+    def create_campaign(
+        self,
+        name: str,
+        app_id: str,
+        app_version: int,
+        connection_id: str,
+        from_number: str,
+        webhook_url: str,
+        webhook_secret: str,
+        start_iso: Optional[str] = None,
+        end_iso: Optional[str] = None,
+        attempts_per_second: float = 0.5,
+    ) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "campaign_id": f"camp_mock_{uuid.uuid4().hex[:12]}",
+            "mock": True,
+            "name": name,
+        }
+
+    def stream_cohort(
+        self,
+        campaign_id: str,
+        cohort_name: str,
+        users: list,
+    ) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "cohort_ids": [f"cohort_mock_{uuid.uuid4().hex[:8]}"],
+            "mock": True,
+            "users_count": len(users),
+        }

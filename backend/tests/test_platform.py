@@ -183,3 +183,62 @@ class SevencoreConversaBackendTests(TestCase):
         self.assertEqual(kb_site.category, "site")
         self.assertEqual(kb_site.source_url, "https://sevencore.ai/docs")
         self.assertEqual(self.agent.knowledge_files.count(), 2)
+
+    def test_sarvam_campaign_followup_classification_and_cohort_dispatch(self):
+        """Tests the 4 outcome classifications and intelligent follow-up cohort generation."""
+        camp = Campaign.objects.create(
+            organization=self.org,
+            name="Follow-up Engine Test Campaign",
+            agent=self.agent,
+            is_confirmed=True,
+        )
+        cc = CampaignContact.objects.create(campaign=camp, contact=self.contact, status="pending")
+
+        # 1. Test Silent after pickup 10s
+        payload_silent_pickup = {
+            "status": "connected",
+            "completion_status": "incompleted",
+            "final_agent_variables": {"call_outcome": "silent_after_pickup"},
+        }
+        status_val, reason_val = CampaignExecutionEngine.classify_call_outcome(payload_silent_pickup)
+        self.assertEqual(status_val, "followup_pending")
+        self.assertEqual(reason_val, "silent_after_pickup_10s")
+
+        # 2. Test Silent mid-conversation 10s with transcript
+        payload_silent_mid = {
+            "status": "connected",
+            "completion_status": "incompleted",
+            "final_agent_variables": {"call_outcome": "silent_mid_conversation"},
+            "interaction_transcript": [
+                {"role": "assistant", "en_text": "Hello Vikram, calling about our software."},
+                {"role": "user", "en_text": "How much does it cost?"},
+            ],
+        }
+        CampaignExecutionEngine.process_contact_followup_outcome(cc, payload_silent_mid)
+        cc.refresh_from_db()
+        self.assertEqual(cc.followup_status, "followup_pending")
+        self.assertEqual(cc.followup_reason, "silent_mid_conversation_10s")
+        self.assertIn("How much does it cost?", cc.previous_conversation)
+        self.assertIsNotNone(cc.followup_eligible_at)
+
+        # 3. Test follow-up cohort dispatch when eligible
+        cc.followup_eligible_at = timezone.now() - datetime.timedelta(minutes=5)
+        cc.save()
+
+        res = CampaignExecutionEngine.dispatch_followup_cohort(camp)
+        self.assertTrue(res["success"])
+        self.assertEqual(res["queued"], 1)
+
+        cc.refresh_from_db()
+        self.assertEqual(cc.followup_status, "followup_queued")
+        self.assertEqual(cc.followup_round, 1)
+
+        # 4. Test Success Concluded
+        payload_success = {
+            "status": "connected",
+            "completion_status": "completed",
+            "final_agent_variables": {"call_outcome": "success"},
+        }
+        status_succ, reason_succ = CampaignExecutionEngine.classify_call_outcome(payload_success)
+        self.assertEqual(status_succ, "success")
+        self.assertIsNone(reason_succ)

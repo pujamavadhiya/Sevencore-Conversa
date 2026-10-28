@@ -74,8 +74,34 @@ export interface Campaign {
   calls_completed: number;
   calls_failed: number;
   contacts_count?: number;
+  sarvam_campaign_id?: string;
+  followups_queued_count?: number;
+  followups_completed_count?: number;
+  followups_pending_count?: number;
+  followups_eligible_count?: number;
   started_at?: string;
   completed_at?: string;
+  created_at: string;
+}
+
+export interface CampaignContact {
+  id: number;
+  campaign: number;
+  contact: Contact;
+  status: "pending" | "calling" | "connected" | "no_answer" | "busy" | "failed" | "skipped_dnd" | "skipped_optout";
+  status_display: string;
+  attempts_count: number;
+  last_attempt_at?: string;
+  custom_variables?: Record<string, any>;
+  notes: string;
+  followup_status: "pending" | "success" | "retrying" | "followup_pending" | "followup_queued" | "given_up";
+  followup_status_display: string;
+  followup_reason?: string;
+  followup_reason_display?: string;
+  followup_round: number;
+  followup_eligible_at?: string;
+  previous_conversation?: string;
+  sarvam_cohort_id?: string;
   created_at: string;
 }
 

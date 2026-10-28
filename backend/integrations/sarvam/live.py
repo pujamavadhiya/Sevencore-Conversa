@@ -143,6 +143,102 @@ class SarvamLiveClient(SarvamBaseClient):
                 "error": f"Network error fetching transcript: {str(exc)}",
             }
 
+    def create_campaign(
+        self,
+        name: str,
+        app_id: str,
+        app_version: int,
+        connection_id: str,
+        from_number: str,
+        webhook_url: str,
+        webhook_secret: str,
+        start_iso: Optional[str] = None,
+        end_iso: Optional[str] = None,
+        attempts_per_second: float = 0.5,
+    ) -> Dict[str, Any]:
+        endpoint = f"{self.base_url}/api/scheduling/v1/orgs/{self.org_id}/workspaces/{self.workspace_id}/campaigns"
+        
+        # Default start/end window if omitted: 5 minutes from now to 7 days from now
+        import datetime
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if not start_iso:
+            start_iso = (now + datetime.timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if not end_iso:
+            end_iso = (now + datetime.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        body = {
+            "name": name,
+            "app_config": {
+                "app_id": app_id,
+                "app_version": app_version,
+                "app_type": "agent",
+                "attempts_per_second": attempts_per_second,
+                "connection_configs": [{"connection_id": connection_id, "phone_numbers": [from_number]}],
+                "retry_config": {
+                    "max_retries": 2,
+                    "retry_interval_minutes": [30, 120],
+                    "retry_on": {
+                        "busy": {"enabled": True},
+                        "no_answer": {"enabled": True},
+                        "short_duration": {"enabled": False},
+                    },
+                },
+                "webhook_config": {
+                    "url": webhook_url,
+                    "headers": {"X-Webhook-Secret": webhook_secret} if webhook_secret else {},
+                },
+            },
+            "start_timestamp": start_iso,
+            "end_timestamp": end_iso,
+            "allowed_schedule": {
+                "timezone": "Asia/Kolkata",
+                "allowed_start_time": "09:00",
+                "allowed_end_time": "18:00",
+                "allowed_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+            },
+        }
+
+        try:
+            resp = requests.post(endpoint, json=body, headers=self._headers(), timeout=self.timeout)
+            if resp.status_code in (200, 201):
+                data = resp.json()
+                return {"success": True, "campaign_id": data.get("campaign_id") or data.get("id"), "data": data}
+            return {"success": False, "error": f"Sarvam create campaign error (HTTP {resp.status_code}): {resp.text}"}
+        except requests.RequestException as exc:
+            return {"success": False, "error": f"Network error creating Sarvam campaign: {str(exc)}"}
+
+    def stream_cohort(
+        self,
+        campaign_id: str,
+        cohort_name: str,
+        users: list,
+    ) -> Dict[str, Any]:
+        endpoint = f"{self.base_url}/api/scheduling/v1/orgs/{self.org_id}/workspaces/{self.workspace_id}/campaigns/{campaign_id}/cohorts/stream"
+        chunk_size = 1000
+        cohort_ids = []
+
+        try:
+            import re
+            for i in range(0, len(users), chunk_size):
+                chunk = users[i : i + chunk_size]
+                clean_name = re.sub(r"[^\w\- ]", "-", f"{cohort_name}-{i // chunk_size + 1}")[:50]
+                resp = requests.post(
+                    endpoint,
+                    json={"name": clean_name, "users": chunk},
+                    headers=self._headers(),
+                    timeout=self.timeout + 15,
+                )
+                if resp.status_code in (200, 201):
+                    c_id = resp.json().get("cohort_id") or resp.json().get("id")
+                    if c_id:
+                        cohort_ids.append(c_id)
+                else:
+                    return {"success": False, "error": f"Failed streaming cohort chunk {clean_name}: {resp.text}"}
+
+            return {"success": True, "cohort_ids": cohort_ids}
+        except requests.RequestException as exc:
+            return {"success": False, "error": f"Network error streaming cohort: {str(exc)}"}
+
     def health_check(self) -> Dict[str, Any]:
         if not self.api_key:
             return {"configured": False, "reason": "Missing SARVAM_API_KEY"}

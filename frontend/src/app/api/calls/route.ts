@@ -25,6 +25,8 @@ export async function POST(req: NextRequest) {
       phone: body.phone,
       app_id: body.app_id,
       app_version: body.app_version ? Number(body.app_version) : undefined,
+      agent_id: body.agent_id ? Number(body.agent_id) : undefined,
+      agent_name: body.agent_name,
       variables: body.variables || {},
       opening_line: body.opening_line,
       bypass_window: Boolean(body.bypass_window),

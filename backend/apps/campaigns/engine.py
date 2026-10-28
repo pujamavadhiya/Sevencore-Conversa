@@ -221,6 +221,166 @@ class CampaignExecutionEngine:
         item.notes = sim["summary"]
         item.save()
 
+        # Process smart follow-up classification
+        cls.process_contact_followup_outcome(item, sim)
+
+    # -------------------------------------------------------------------------
+    # Sarvam Batch Follow-up Classification & Cohort Engine
+    # -------------------------------------------------------------------------
+    MAX_FOLLOWUP_ROUNDS = 2
+    TRANSCRIPT_MAX_CHARS = 1500
+
+    FOLLOWUP_DELAY_HOURS = {
+        "no_answer_retries_exhausted": 24,
+        "busy_retries_exhausted": 6,
+        "silent_after_pickup_10s": 3,
+        "silent_mid_conversation_10s": 2,      # Engaged but dropped; call back sooner
+        "connected_but_no_conclusion": 3,
+        "call_failed": 1,
+    }
+
+    @classmethod
+    def classify_call_outcome(cls, payload: Dict[str, Any]) -> tuple[str, str | None]:
+        """
+        Pure function: Maps one webhook/attempt payload to (followup_status, followup_reason).
+        Covers:
+          1) Not answered / busy -> platform retries; if exhausted -> follow-up batch
+          2) Answered, silent 10s -> agent hangs up -> follow-up with reason
+          3) Silent 10s mid-talk -> agent hangs up -> follow-up with conversation + reason
+          4) Interacted, concluded -> agent ends call -> SUCCESS, conversation stored
+        """
+        connectivity = payload.get("connectivity_status") or payload.get("status")
+        connected = connectivity == "connected"
+        vars_ = payload.get("final_agent_variables") or {}
+        outcome = vars_.get("call_outcome")
+        completion = payload.get("completion_status")
+
+        if not connected:
+            if payload.get("next_action_status") == "retry":
+                return "retrying", None
+            if completion == "failed" and payload.get("failure_reason"):
+                return "followup_pending", "call_failed"
+            reason = "busy_retries_exhausted" if connectivity == "busy" else "no_answer_retries_exhausted"
+            return "followup_pending", reason
+
+        # Connected calls
+        if outcome == "success" or completion == "completed":
+            return "success", None
+        if outcome == "silent_after_pickup":
+            return "followup_pending", "silent_after_pickup_10s"
+        if outcome == "silent_mid_conversation":
+            return "followup_pending", "silent_mid_conversation_10s"
+
+        # Connected, but call ended without agent conclusion
+        return "followup_pending", "connected_but_no_conclusion"
+
+    @classmethod
+    def process_contact_followup_outcome(cls, item: CampaignContact, payload: Dict[str, Any]):
+        """Updates contact follow-up state machine based on Sarvam call outcome."""
+        status_val, reason_val = cls.classify_call_outcome(payload)
+
+        # Extract transcript text snippet if available
+        transcript_snippet = ""
+        raw_turns = payload.get("interaction_transcript") or payload.get("messages") or []
+        if isinstance(raw_turns, list):
+            lines = []
+            for t in raw_turns:
+                role = t.get("role", "speaker")
+                content = t.get("content") or t.get("en_text") or t.get("text") or ""
+                if content:
+                    lines.append(f"{role}: {content}")
+            transcript_snippet = "\n".join(lines)[-cls.TRANSCRIPT_MAX_CHARS:]
+
+        if transcript_snippet:
+            item.previous_conversation = transcript_snippet
+
+        if status_val == "retrying":
+            item.followup_status = "retrying"
+        elif status_val == "success":
+            item.followup_status = "success"
+            item.followup_reason = None
+            if item.campaign:
+                item.campaign.followups_completed_count += 1
+                item.campaign.save()
+        else:
+            item.followup_reason = reason_val
+            if item.followup_round >= cls.MAX_FOLLOWUP_ROUNDS:
+                item.followup_status = "given_up"
+            else:
+                item.followup_status = "followup_pending"
+                delay_hours = cls.FOLLOWUP_DELAY_HOURS.get(reason_val, 3)
+                item.followup_eligible_at = timezone.now() + datetime.timedelta(hours=delay_hours)
+
+        item.save()
+
+    @classmethod
+    def dispatch_followup_cohort(cls, campaign: Campaign, batch_label: str | None = None) -> Dict[str, Any]:
+        """
+        Dispatches all eligible follow-up contacts into the same campaign as a new cohort.
+        Injects app_variables: followup_reason, followup_round, and previous_conversation
+        so the agent smoothly picks up the conversation context.
+        """
+        now = timezone.now()
+        due_contacts = campaign.campaign_contacts.filter(
+            followup_status="followup_pending",
+            followup_eligible_at__isnull=False,
+            followup_eligible_at__lte=now
+        ).select_related("contact")
+
+        if not due_contacts.exists():
+            return {
+                "success": True,
+                "queued": 0,
+                "message": "No follow-up contacts are currently eligible for dispatch.",
+            }
+
+        client = get_sarvam_client()
+        users = []
+        for item in due_contacts:
+            users.append({
+                "user_phone_number": item.contact.phone_number,
+                "user_identifier": f"campaign_{campaign.id}_contact_{item.id}",
+                "app_variables": {
+                    "followup_reason": item.followup_reason or "",
+                    "followup_round": str(item.followup_round + 1),
+                    "previous_conversation": (item.previous_conversation or "")[-cls.TRANSCRIPT_MAX_CHARS:],
+                },
+            })
+
+        label = batch_label or f"followup-c{campaign.id}-{now.strftime('%Y%m%d-%H%M')}"
+        sarvam_camp_id = campaign.sarvam_campaign_id or f"camp_{campaign.id}"
+
+        cohort_resp = client.stream_cohort(
+            campaign_id=sarvam_camp_id,
+            cohort_name=label,
+            users=users,
+        )
+
+        cohort_ids = cohort_resp.get("cohort_ids", [])
+        cohort_id_str = cohort_ids[0] if cohort_ids else "cohort_batch"
+
+        # Update contact states
+        count = 0
+        for item in due_contacts:
+            item.followup_status = "followup_queued"
+            item.followup_round += 1
+            item.sarvam_cohort_id = cohort_id_str
+            item.save()
+            count += 1
+
+        campaign.followups_queued_count += count
+        campaign.save()
+
+        logger.info("Dispatched %d follow-ups for campaign %s in cohort %s", count, campaign.id, label)
+
+        return {
+            "success": True,
+            "queued": count,
+            "cohort_label": label,
+            "cohort_ids": cohort_ids,
+            "is_mock": client.is_mock,
+        }
+
     @classmethod
     def recalculate_campaign_metrics(cls, campaign: Campaign):
         total = campaign.campaign_contacts.count()

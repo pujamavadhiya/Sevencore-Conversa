@@ -90,6 +90,10 @@ class SarvamWebhookView(APIView):
             item.notes = failure_reason or "Call completed"
             item.save()
 
+            # Execute Sarvam smart follow-up state classification
+            from apps.campaigns.engine import CampaignExecutionEngine
+            CampaignExecutionEngine.process_contact_followup_outcome(item, payload)
+
         # If call failed because of TRAI NDNC, auto-record in SuppressionEntry
         if failure_reason and "NDNC" in failure_reason.upper():
             SuppressionEntry.objects.get_or_create(

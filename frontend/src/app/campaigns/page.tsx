@@ -18,6 +18,7 @@ import {
   Loader2,
   Sliders,
   Sparkles,
+  FileText,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Campaign, VoiceAgent, Contact } from "@/types";
@@ -44,9 +45,12 @@ export default function CampaignsPage() {
   const [creating, setCreating] = useState(false);
   const [wizardError, setWizardError] = useState<string | null>(null);
 
-  // Selected Campaign Detail Modal
+  // Selected Campaign Detail Modal & Follow-ups
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
   const [campaignContactsList, setCampaignContactsList] = useState<any[]>([]);
+  const [dispatchingFollowups, setDispatchingFollowups] = useState(false);
+  const [followupFilter, setFollowupFilter] = useState<string>("all");
+  const [viewingExcerpt, setViewingExcerpt] = useState<{ name: string; text: string } | null>(null);
 
   useEffect(() => {
     loadData();
@@ -149,6 +153,27 @@ export default function CampaignsPage() {
       setCampaignContactsList(contacts);
     } catch {
       setCampaignContactsList([]);
+    }
+  };
+
+  const handleDispatchFollowups = async (campaignId: number) => {
+    try {
+      setDispatchingFollowups(true);
+      const res = await api.dispatchCampaignFollowups(campaignId);
+      if (res.queued > 0) {
+        alert(`Successfully queued ${res.queued} eligible contacts into follow-up cohort '${res.cohort_label}'.`);
+      } else {
+        alert(res.message || "No contacts are currently eligible for follow-up dispatch.");
+      }
+      const updatedCampaign = await api.getCampaign(campaignId);
+      setSelectedCampaign(updatedCampaign);
+      const contacts = await api.getCampaignContacts(campaignId);
+      setCampaignContactsList(contacts);
+      loadData();
+    } catch (err: any) {
+      alert("Failed to dispatch follow-up cohort: " + (err.message || String(err)));
+    } finally {
+      setDispatchingFollowups(false);
     }
   };
 
@@ -667,61 +692,345 @@ export default function CampaignsPage() {
       {/* Selected Campaign Detail Modal */}
       {selectedCampaign && (
         <div className="modal-overlay">
-          <div className="modal-content" style={{ maxWidth: "720px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
-              <h2 style={{ fontSize: "18px" }}>Campaign: {selectedCampaign.name}</h2>
+          <div className="modal-content" style={{ maxWidth: "860px", padding: "28px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "18px", paddingBottom: "12px", borderBottom: "1px solid var(--border-subtle)" }}>
+              <div>
+                <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  Campaign Intelligence & Follow-up Orchestration
+                </div>
+                <h2 style={{ fontSize: "20px", margin: "2px 0 0", color: "var(--text-primary)" }}>
+                  {selectedCampaign.name}
+                </h2>
+              </div>
               <button
                 onClick={() => setSelectedCampaign(null)}
+                style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "20px" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Campaign Core Metrics */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginBottom: "20px" }}>
+              <div style={{ padding: "14px", background: "#F8FAFC", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)" }}>
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 600 }}>Total Contacts</div>
+                <div style={{ fontSize: "20px", fontWeight: "800", color: "#0F172A" }}>{selectedCampaign.total_contacts}</div>
+              </div>
+              <div style={{ padding: "14px", background: "#F8FAFC", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)" }}>
+                <div style={{ fontSize: "11px", color: "var(--text-muted)", fontWeight: 600 }}>Initial Dials Made</div>
+                <div style={{ fontSize: "20px", fontWeight: "800", color: "#4F46E5" }}>{selectedCampaign.calls_attempted}</div>
+              </div>
+              <div style={{ padding: "14px", background: "var(--accent-emerald-bg)", border: "1px solid rgba(5, 150, 105, 0.2)", borderRadius: "var(--radius-md)" }}>
+                <div style={{ fontSize: "11px", color: "var(--accent-emerald)", fontWeight: 600 }}>Connected & Finished</div>
+                <div style={{ fontSize: "20px", fontWeight: "800", color: "var(--accent-emerald)" }}>{selectedCampaign.calls_answered}</div>
+              </div>
+              <div style={{ padding: "14px", background: "var(--accent-amber-bg)", border: "1px solid rgba(217, 119, 6, 0.2)", borderRadius: "var(--radius-md)" }}>
+                <div style={{ fontSize: "11px", color: "var(--accent-amber)", fontWeight: 600 }}>Total Spend</div>
+                <div style={{ fontSize: "20px", fontWeight: "800", color: "var(--accent-amber)" }}>₹{selectedCampaign.actual_cost_inr}</div>
+              </div>
+            </div>
+
+            {/* Sarvam Batch Smart Follow-up Cohort Box */}
+            <div
+              style={{
+                padding: "18px 20px",
+                background: "linear-gradient(135deg, #F8FAFC 0%, #EEF2FF 100%)",
+                border: "1px solid #C7D2FE",
+                borderRadius: "var(--radius-lg)",
+                marginBottom: "24px",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <div
+                    style={{
+                      width: "32px",
+                      height: "32px",
+                      borderRadius: "8px",
+                      background: "#4F46E5",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Sparkles size={16} color="#FFFFFF" />
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: "15px", margin: 0, fontWeight: 700, color: "#1E1B4B" }}>
+                      Sarvam Multi-Round Follow-up Engine
+                    </h3>
+                    <div style={{ fontSize: "12px", color: "#475569" }}>
+                      Classifies silent pickups, mid-call drops, and unreached contacts into intelligent follow-up cohorts with conversation memory.
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => handleDispatchFollowups(selectedCampaign.id)}
+                  disabled={dispatchingFollowups || (selectedCampaign.followups_eligible_count || 0) === 0}
+                  style={{ whiteSpace: "nowrap" }}
+                >
+                  {dispatchingFollowups ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" /> Streaming Cohort...
+                    </>
+                  ) : (
+                    <>
+                      <Play size={13} /> Dispatch Follow-up Cohort ({selectedCampaign.followups_eligible_count || 0} Due)
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Follow-up State Counters */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px" }}>
+                <div style={{ background: "#FFFFFF", padding: "10px 12px", borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Eligible to Redial Now</div>
+                  <div style={{ fontSize: "16px", fontWeight: 700, color: (selectedCampaign.followups_eligible_count || 0) > 0 ? "#4F46E5" : "#64748B" }}>
+                    {selectedCampaign.followups_eligible_count || 0} contacts
+                  </div>
+                </div>
+                <div style={{ background: "#FFFFFF", padding: "10px 12px", borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Follow-up Pending Window</div>
+                  <div style={{ fontSize: "16px", fontWeight: 700, color: "#D97706" }}>
+                    {selectedCampaign.followups_pending_count || 0} contacts
+                  </div>
+                </div>
+                <div style={{ background: "#FFFFFF", padding: "10px 12px", borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Queued in Cohort</div>
+                  <div style={{ fontSize: "16px", fontWeight: 700, color: "#0284C7" }}>
+                    {selectedCampaign.followups_queued_count || 0} contacts
+                  </div>
+                </div>
+                <div style={{ background: "#FFFFFF", padding: "10px 12px", borderRadius: "8px", border: "1px solid #E2E8F0" }}>
+                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Concluded Successfully</div>
+                  <div style={{ fontSize: "16px", fontWeight: 700, color: "#059669" }}>
+                    {selectedCampaign.followups_completed_count || 0} contacts
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Filter Tabs */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+              <div style={{ display: "flex", gap: "8px" }}>
+                {[
+                  { id: "all", label: `All Dials (${campaignContactsList.length})` },
+                  {
+                    id: "due",
+                    label: `Follow-up Due (${
+                      campaignContactsList.filter(
+                        (c) =>
+                          c.followup_status === "followup_pending" &&
+                          c.followup_eligible_at &&
+                          new Date(c.followup_eligible_at) <= new Date()
+                      ).length
+                    })`,
+                  },
+                  {
+                    id: "pending",
+                    label: `Pending Timer (${
+                      campaignContactsList.filter((c) => c.followup_status === "followup_pending").length
+                    })`,
+                  },
+                  {
+                    id: "success",
+                    label: `Concluded (${
+                      campaignContactsList.filter((c) => c.followup_status === "success" || c.status === "connected").length
+                    })`,
+                  },
+                ].map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setFollowupFilter(tab.id)}
+                    className="btn btn-secondary btn-sm"
+                    style={{
+                      background: followupFilter === tab.id ? "#4F46E5" : "#FFFFFF",
+                      color: followupFilter === tab.id ? "#FFFFFF" : "#475569",
+                      borderColor: followupFilter === tab.id ? "#4F46E5" : "#CBD5E1",
+                      fontSize: "12px",
+                      padding: "4px 10px",
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Audience Table with Follow-up Intelligence */}
+            <div style={{ maxHeight: "280px", overflowY: "auto", border: "1px solid var(--border-subtle)", borderRadius: "8px", background: "#FFFFFF" }}>
+              <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+                <thead style={{ background: "#F8FAFC", position: "sticky", top: 0, zIndex: 1 }}>
+                  <tr>
+                    <th style={{ padding: "10px 14px", textAlign: "left", color: "#64748B", fontWeight: 700 }}>Contact</th>
+                    <th style={{ padding: "10px 14px", textAlign: "left", color: "#64748B", fontWeight: 700 }}>Phone</th>
+                    <th style={{ padding: "10px 14px", textAlign: "left", color: "#64748B", fontWeight: 700 }}>Call Status</th>
+                    <th style={{ padding: "10px 14px", textAlign: "left", color: "#64748B", fontWeight: 700 }}>Follow-up Outcome</th>
+                    <th style={{ padding: "10px 14px", textAlign: "left", color: "#64748B", fontWeight: 700 }}>Round / Memory</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {campaignContactsList
+                    .filter((cc) => {
+                      if (followupFilter === "due") {
+                        return (
+                          cc.followup_status === "followup_pending" &&
+                          cc.followup_eligible_at &&
+                          new Date(cc.followup_eligible_at) <= new Date()
+                        );
+                      }
+                      if (followupFilter === "pending") {
+                        return cc.followup_status === "followup_pending";
+                      }
+                      if (followupFilter === "success") {
+                        return cc.followup_status === "success" || cc.status === "connected";
+                      }
+                      return true;
+                    })
+                    .map((cc) => {
+                      const isEligibleNow =
+                        cc.followup_status === "followup_pending" &&
+                        cc.followup_eligible_at &&
+                        new Date(cc.followup_eligible_at) <= new Date();
+
+                      return (
+                        <tr key={cc.id} style={{ borderBottom: "1px solid #F1F5F9" }}>
+                          <td style={{ padding: "10px 14px", fontWeight: 600, color: "#1E293B" }}>
+                            {cc.contact?.name}
+                          </td>
+                          <td style={{ padding: "10px 14px", fontFamily: "monospace", color: "#475569" }}>
+                            {cc.contact?.phone_number}
+                          </td>
+                          <td style={{ padding: "10px 14px" }}>
+                            <span
+                              className={`badge ${
+                                cc.status === "connected"
+                                  ? "badge-connected"
+                                  : cc.status === "calling"
+                                  ? "badge-running"
+                                  : cc.status === "no_answer" || cc.status === "busy"
+                                  ? "badge-warning"
+                                  : "badge-pending"
+                              }`}
+                              style={{ fontSize: "11px" }}
+                            >
+                              {cc.status}
+                            </span>
+                          </td>
+                          <td style={{ padding: "10px 14px" }}>
+                            {cc.followup_reason ? (
+                              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                                <span
+                                  className="badge"
+                                  style={{
+                                    fontSize: "11px",
+                                    background: cc.followup_reason.includes("silent") ? "#EEF2FF" : "#FFFBEB",
+                                    color: cc.followup_reason.includes("silent") ? "#4338CA" : "#B45309",
+                                    border: cc.followup_reason.includes("silent") ? "1px solid #C7D2FE" : "1px solid #FCD34D",
+                                  }}
+                                >
+                                  {cc.followup_reason_display || cc.followup_reason}
+                                </span>
+                                {isEligibleNow ? (
+                                  <span style={{ fontSize: "10px", color: "#059669", fontWeight: 700 }}>
+                                    ● Eligible to dispatch now
+                                  </span>
+                                ) : cc.followup_eligible_at ? (
+                                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
+                                    Eligible at {new Date(cc.followup_eligible_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : cc.followup_status === "success" ? (
+                              <span className="badge badge-connected" style={{ fontSize: "11px" }}>
+                                Concluded (Success)
+                              </span>
+                            ) : (
+                              <span style={{ color: "var(--text-muted)", fontSize: "11px" }}>Initial Round</span>
+                            )}
+                          </td>
+                          <td style={{ padding: "10px 14px" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                              <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                                Round {cc.followup_round || 0}
+                              </span>
+                              {cc.previous_conversation && (
+                                <button
+                                  onClick={() =>
+                                    setViewingExcerpt({
+                                      name: cc.contact?.name || "Recipient",
+                                      text: cc.previous_conversation,
+                                    })
+                                  }
+                                  className="badge"
+                                  style={{
+                                    background: "#F1F5F9",
+                                    border: "1px solid #CBD5E1",
+                                    color: "#475569",
+                                    cursor: "pointer",
+                                    fontSize: "10px",
+                                  }}
+                                  title="View Stored Conversation Context"
+                                >
+                                  <FileText size={10} /> Context
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Conversation Excerpt Viewer Modal */}
+      {viewingExcerpt && (
+        <div className="modal-overlay" style={{ zIndex: 120 }}>
+          <div className="modal-content" style={{ maxWidth: "540px", padding: "24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <FileText size={18} color="#4F46E5" />
+                <h3 style={{ fontSize: "16px", margin: 0 }}>
+                  Stored Conversation Context: {viewingExcerpt.name}
+                </h3>
+              </div>
+              <button
+                onClick={() => setViewingExcerpt(null)}
                 style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", fontSize: "18px" }}
               >
                 ✕
               </button>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginBottom: "20px" }}>
-              <div style={{ padding: "12px", background: "rgba(255,255,255,0.02)", borderRadius: "8px" }}>
-                <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Total Contacts</div>
-                <div style={{ fontSize: "18px", fontWeight: "700" }}>{selectedCampaign.total_contacts}</div>
-              </div>
-              <div style={{ padding: "12px", background: "rgba(255,255,255,0.02)", borderRadius: "8px" }}>
-                <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Attempted</div>
-                <div style={{ fontSize: "18px", fontWeight: "700" }}>{selectedCampaign.calls_attempted}</div>
-              </div>
-              <div style={{ padding: "12px", background: "var(--accent-emerald-bg)", borderRadius: "8px" }}>
-                <div style={{ fontSize: "11px", color: "var(--accent-emerald)" }}>Answered</div>
-                <div style={{ fontSize: "18px", fontWeight: "700", color: "var(--accent-emerald)" }}>{selectedCampaign.calls_answered}</div>
-              </div>
-              <div style={{ padding: "12px", background: "var(--accent-amber-bg)", borderRadius: "8px" }}>
-                <div style={{ fontSize: "11px", color: "var(--accent-amber)" }}>Total Spend</div>
-                <div style={{ fontSize: "18px", fontWeight: "700", color: "var(--accent-amber)" }}>₹{selectedCampaign.actual_cost_inr}</div>
-              </div>
-            </div>
-
-            <h3 style={{ fontSize: "14px", marginBottom: "10px" }}>Audience Dials ({campaignContactsList.length})</h3>
-            <div style={{ maxHeight: "250px", overflowY: "auto", border: "1px solid var(--border-subtle)", borderRadius: "8px" }}>
-              <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
-                <thead style={{ background: "rgba(0,0,0,0.4)" }}>
-                  <tr>
-                    <th style={{ padding: "8px 12px", textAlign: "left" }}>Contact</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left" }}>Phone</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left" }}>Status</th>
-                    <th style={{ padding: "8px 12px", textAlign: "left" }}>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {campaignContactsList.map((cc) => (
-                    <tr key={cc.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
-                      <td style={{ padding: "8px 12px" }}>{cc.contact?.name}</td>
-                      <td style={{ padding: "8px 12px", fontFamily: "monospace" }}>{cc.contact?.phone_number}</td>
-                      <td style={{ padding: "8px 12px" }}>
-                        <span className={`badge ${cc.status === "connected" ? "badge-connected" : cc.status === "calling" ? "badge-running" : "badge-pending"}`}>
-                          {cc.status}
-                        </span>
-                      </td>
-                      <td style={{ padding: "8px 12px", color: "var(--text-muted)" }}>{cc.notes || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "12px" }}>
+              This conversation transcript is automatically fed into <code>app_variables.previous_conversation</code> when the follow-up call is placed, allowing the Voice Agent to resume seamlessly.
+            </p>
+            <pre
+              style={{
+                margin: 0,
+                padding: "14px",
+                background: "#F8FAFC",
+                border: "1px solid #E2E8F0",
+                borderRadius: "8px",
+                fontSize: "12px",
+                color: "#1E293B",
+                whiteSpace: "pre-wrap",
+                maxHeight: "260px",
+                overflowY: "auto",
+                fontFamily: "monospace",
+              }}
+            >
+              {viewingExcerpt.text}
+            </pre>
+            <div style={{ marginTop: "16px", textAlign: "right" }}>
+              <button className="btn btn-secondary btn-sm" onClick={() => setViewingExcerpt(null)}>
+                Close
+              </button>
             </div>
           </div>
         </div>

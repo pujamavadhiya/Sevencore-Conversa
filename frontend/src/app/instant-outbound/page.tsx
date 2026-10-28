@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import {
   Zap,
   PhoneCall,
@@ -16,13 +17,22 @@ import {
   Server,
   ArrowRight,
   Info,
+  Bot,
+  User,
+  Copy,
+  Check,
+  ExternalLink,
+  PhoneForwarded,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { VoiceAgent } from "@/types";
 
 interface CallJob {
   job_id: string;
   app_id: string;
   app_version: number;
+  agent_id?: number;
+  agent_name?: string;
   phone: string;
   variables: Record<string, any>;
   opening_line?: string;
@@ -66,17 +76,18 @@ interface ServiceConfig {
 }
 
 export default function InstantOutboundPage() {
-  // Service configuration
+  // Service configuration & Voice Agents
   const [config, setConfig] = useState<ServiceConfig | null>(null);
+  const [agents, setAgents] = useState<VoiceAgent[]>([]);
+  const [loadingAgents, setLoadingAgents] = useState(true);
 
   // Form states
+  const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [phone, setPhone] = useState("+91");
-  const [appId, setAppId] = useState("");
-  const [appVersion, setAppVersion] = useState("1");
   const [openingLine, setOpeningLine] = useState("");
   const [bypassWindow, setBypassWindow] = useState(false);
   const [customVars, setCustomVars] = useState<Array<{ key: string; val: string }>>([
-    { key: "user_name", val: "Asha" },
+    { key: "user_name", val: "Asha Sharma" },
   ]);
 
   // Operational states
@@ -85,10 +96,12 @@ export default function InstantOutboundPage() {
   const [recentJobs, setRecentJobs] = useState<CallJob[]>([]);
   const [pollInterval, setPollInterval] = useState<NodeJS.Timeout | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  // Load config and existing jobs
+  // Load config, agents, and existing jobs on mount
   useEffect(() => {
     loadConfig();
+    loadAgents();
     loadJobs();
   }, []);
 
@@ -100,7 +113,6 @@ export default function InstantOutboundPage() {
           const res = await api.getInstantCall(activeJob.job_id);
           if (res && !res.error) {
             setActiveJob(res);
-            // Refresh recent jobs
             loadJobs();
           }
         } catch {
@@ -119,14 +131,29 @@ export default function InstantOutboundPage() {
     try {
       const data = await api.getInstantConfig();
       setConfig(data);
-      if (data?.default_app_id) {
-        setAppId(data.default_app_id);
-      }
-      if (data?.default_app_version) {
-        setAppVersion(String(data.default_app_version));
-      }
     } catch (err) {
       console.error("Failed to load config:", err);
+    }
+  };
+
+  const loadAgents = async () => {
+    try {
+      setLoadingAgents(true);
+      const data = await api.getAgents();
+      const list = Array.isArray(data) ? data : data?.results || [];
+      setAgents(list);
+      if (list.length > 0) {
+        const first = list[0];
+        setSelectedAgentId(String(first.id));
+        if (first.greeting_message) {
+          setOpeningLine(first.greeting_message);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load agents:", err);
+      setAgents([]);
+    } finally {
+      setLoadingAgents(false);
     }
   };
 
@@ -144,6 +171,16 @@ export default function InstantOutboundPage() {
     }
   };
 
+  const handleSelectAgent = (agentId: string) => {
+    setSelectedAgentId(agentId);
+    const found = agents.find((a) => String(a.id) === agentId);
+    if (found && found.greeting_message) {
+      setOpeningLine(found.greeting_message);
+    }
+  };
+
+  const selectedAgent = agents.find((a) => String(a.id) === selectedAgentId);
+
   const handleAddVar = () => {
     setCustomVars([...customVars, { key: "", val: "" }]);
   };
@@ -158,11 +195,33 @@ export default function InstantOutboundPage() {
     setCustomVars(updated);
   };
 
+  const handleApplyPreset = (key: string, defaultVal: string) => {
+    if (!customVars.some((v) => v.key === key)) {
+      setCustomVars([...customVars, { key, val: defaultVal }]);
+    }
+  };
+
+  const copyToClipboard = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
   const handleDispatch = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!phone || phone.trim() === "+91" || phone.trim() === "+") {
+    if (agents.length === 0) {
+      setErrorMsg("No existing agent. Please create your voice agent first before placing a call.");
+      return;
+    }
+
+    if (!selectedAgent) {
+      setErrorMsg("Please select a Voice Agent from the dropdown.");
+      return;
+    }
+
+    if (!phone || phone.trim() === "+91" || phone.trim() === "+" || phone.trim().length < 10) {
       setErrorMsg("Please provide a valid E.164 phone number including country code (e.g. +919876543210).");
       return;
     }
@@ -178,9 +237,11 @@ export default function InstantOutboundPage() {
       setSubmitting(true);
       const res = await api.dispatchInstantCall({
         phone: phone.trim(),
-        app_id: appId || undefined,
-        app_version: appVersion ? Number(appVersion) : undefined,
-        opening_line: openingLine.trim() || undefined,
+        app_id: selectedAgent.sarvam_app_id || config?.default_app_id || "agent_sales_v1",
+        app_version: selectedAgent.sarvam_app_version || 1,
+        agent_id: selectedAgent.id,
+        agent_name: selectedAgent.name,
+        opening_line: openingLine.trim() || selectedAgent.greeting_message || undefined,
         variables: variablesMap,
         bypass_window: bypassWindow,
       });
@@ -188,7 +249,6 @@ export default function InstantOutboundPage() {
       if (res.error) {
         setErrorMsg(res.error);
       } else if (res.job_id) {
-        // Fetch full newly created job
         const fullJob = await api.getInstantCall(res.job_id);
         setActiveJob(fullJob);
         loadJobs();
@@ -203,15 +263,15 @@ export default function InstantOutboundPage() {
   const getStateBadge = (state: string) => {
     switch (state) {
       case "completed":
-        return <span className="badge badge-success">Completed</span>;
+        return <span className="badge badge-connected"><CheckCircle2 size={12} /> Connected</span>;
       case "dialing":
         return (
-          <span className="badge badge-primary" style={{ animation: "pulse 1.5s infinite" }}>
-            Dialing...
+          <span className="badge badge-running">
+            <span className="live-dot" style={{ width: "6px", height: "6px" }} /> Dialing
           </span>
         );
       case "rejected":
-        return <span className="badge badge-danger">Rejected (Guard)</span>;
+        return <span className="badge badge-danger"><AlertTriangle size={12} /> Rejected (Guard)</span>;
       case "failed":
         return <span className="badge badge-danger">Failed</span>;
       case "busy":
@@ -219,133 +279,315 @@ export default function InstantOutboundPage() {
       case "no_answer":
         return <span className="badge badge-warning">No Answer</span>;
       case "exhausted":
-        return <span className="badge badge-secondary">Retries Exhausted</span>;
+        return <span className="badge" style={{ background: "#F1F5F9", color: "#475569" }}>Retries Exhausted</span>;
       default:
-        return <span className="badge badge-secondary">{state}</span>;
+        return <span className="badge" style={{ background: "#F1F5F9", color: "#475569" }}>{state}</span>;
     }
   };
 
   return (
     <div>
       {/* Page Header */}
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "24px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "28px" }}>
         <div>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "6px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "6px" }}>
             <div
               style={{
-                width: "36px",
-                height: "36px",
-                borderRadius: "10px",
-                background: "linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)",
+                width: "40px",
+                height: "40px",
+                borderRadius: "12px",
+                background: "linear-gradient(135deg, #4F46E5 0%, #7C3AED 100%)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                boxShadow: "0 0 16px rgba(99, 102, 241, 0.4)",
+                boxShadow: "0 4px 12px rgba(79, 70, 229, 0.25)",
               }}
             >
-              <Zap size={20} color="#FFFFFF" />
+              <Zap size={22} color="#FFFFFF" />
             </div>
-            <h1 style={{ margin: 0 }}>Instant Outbound Orchestrator</h1>
+            <div>
+              <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 700, color: "var(--text-primary)" }}>
+                Instant Outbound Caller
+              </h1>
+              <p className="subtitle" style={{ margin: 0 }}>
+                Trigger immediate, high-fidelity AI voice phone calls to any Indian number using your pre-configured Voice Agents.
+              </p>
+            </div>
           </div>
-          <p className="subtitle" style={{ margin: 0 }}>
-            Server-side Sarvam Voice Agent orchestrator running directly inside Next.js with state machine, automatic retries, and webhook listeners.
-          </p>
         </div>
 
-        <button onClick={() => { loadConfig(); loadJobs(); }} className="btn btn-secondary">
-          <RefreshCw size={14} /> Refresh Service
-        </button>
+        <div style={{ display: "flex", gap: "10px" }}>
+          <Link href="/agents" className="btn btn-secondary">
+            <Bot size={15} /> Manage Voice Agents
+          </Link>
+          <button
+            onClick={() => {
+              loadConfig();
+              loadAgents();
+              loadJobs();
+            }}
+            className="btn btn-secondary"
+            title="Refresh Service and Telephony Configuration"
+          >
+            <RefreshCw size={14} /> Refresh
+          </button>
+        </div>
       </div>
 
-      {/* Diagnostics / Environment Status Bar */}
-      {config && (
+      {/* Telephony Gateway & Compliance Cards */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+          gap: "16px",
+          marginBottom: "28px",
+        }}
+      >
+        {/* Telephony Gateway Number */}
+        <div className="glass-panel" style={{ padding: "18px 20px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Telephony Gateway
+            </span>
+            <span className="badge badge-connected">
+              <span className="live-dot" /> Live
+            </span>
+          </div>
+          <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)", fontFamily: "monospace" }}>
+            {config?.caller_number || "+91 80 4000 1234"}
+          </div>
+          <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
+            Sarvam Rented Caller ID (CLI)
+          </div>
+        </div>
+
+        {/* Selected Voice Agent */}
+        <div className="glass-panel" style={{ padding: "18px 20px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Active Voice Agent
+            </span>
+            <Bot size={16} color="#4F46E5" />
+          </div>
+          <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text-primary)" }}>
+            {selectedAgent ? selectedAgent.name : "None Selected"}
+          </div>
+          <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
+            {selectedAgent ? `${selectedAgent.language_display || selectedAgent.primary_language} · ${selectedAgent.speaker}` : "Create an agent first"}
+          </div>
+        </div>
+
+        {/* TRAI Window */}
+        <div className="glass-panel" style={{ padding: "18px 20px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Calling Window
+            </span>
+            <Clock size={16} color="#0284C7" />
+          </div>
+          <div style={{ fontSize: "16px", fontWeight: 700, color: "#0284C7" }}>
+            {config?.calling_window_hours || "09:00 - 20:00"} IST
+          </div>
+          <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
+            TRAI Indian Regulatory Compliance
+          </div>
+        </div>
+
+        {/* Webhook Status */}
+        <div className="glass-panel" style={{ padding: "18px 20px" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+            <span style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Event Webhook
+            </span>
+            <ShieldCheck size={16} color="#059669" />
+          </div>
+          <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            /api/sarvam/webhook
+          </div>
+          <div style={{ fontSize: "12px", color: "#059669", marginTop: "4px" }}>
+            Secret Authenticated & Idempotent
+          </div>
+        </div>
+      </div>
+
+      {/* If No Agents Exist: Prominent Alert Banner */}
+      {!loadingAgents && agents.length === 0 && (
         <div
-          className="card"
           style={{
-            padding: "16px 20px",
-            marginBottom: "24px",
-            background: "rgba(30, 41, 59, 0.6)",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
+            padding: "28px 32px",
+            background: "#FFFFFF",
+            border: "1px solid #FCD34D",
+            borderRadius: "var(--radius-lg)",
+            boxShadow: "var(--shadow-sm)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "28px",
+            gap: "24px",
           }}
         >
-          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <div
-                style={{
-                  width: "10px",
-                  height: "10px",
-                  borderRadius: "50%",
-                  background: config.api_key_configured ? "#10B981" : "#F59E0B",
-                  boxShadow: config.api_key_configured ? "0 0 10px #10B981" : "0 0 10px #F59E0B",
-                }}
-              />
-              <div>
-                <div style={{ fontSize: "12px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.05em" }}>
-                  Sarvam Telephony Provider
-                </div>
-                <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-primary)" }}>
-                  {config.caller_number || "No Caller Number configured in .env.local"}
-                </div>
-              </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "18px" }}>
+            <div
+              style={{
+                width: "48px",
+                height: "48px",
+                borderRadius: "14px",
+                background: "var(--accent-amber-bg)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+              }}
+            >
+              <Bot size={26} color="#D97706" />
             </div>
-
-            <div style={{ borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: "16px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Org / Workspace</div>
-              <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-secondary)" }}>
-                {config.org_id || "None"} / {config.workspace_id || "None"}
-              </div>
-            </div>
-
-            <div style={{ borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: "16px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Calling Window</div>
-              <div style={{ fontSize: "13px", fontWeight: 600, color: "#38BDF8" }}>
-                {config.calling_window_hours} ({config.timezone})
-              </div>
-            </div>
-
-            <div style={{ borderLeft: "1px solid rgba(255,255,255,0.08)", paddingLeft: "16px" }}>
-              <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Webhook URL</div>
-              <div style={{ fontSize: "12px", fontFamily: "monospace", color: "#A78BFA" }}>
-                {config.webhook_url}
-              </div>
+            <div>
+              <h3 style={{ fontSize: "18px", color: "#92400E", marginBottom: "4px" }}>
+                No existing agent. Create your agent first.
+              </h3>
+              <p style={{ margin: 0, fontSize: "14px", color: "#B45309", lineHeight: 1.5 }}>
+                Instant outbound calls require a pre-configured Voice Agent persona with language, instructions, and speech models. Please create your first Voice Agent to enable instant calling.
+              </p>
             </div>
           </div>
+          <Link href="/agents" className="btn btn-primary" style={{ padding: "12px 20px", flexShrink: 0 }}>
+            <Plus size={16} /> Create Your Agent First
+          </Link>
         </div>
       )}
 
+      {/* Error Message Toast */}
       {errorMsg && (
         <div
           style={{
             padding: "14px 18px",
-            borderRadius: "8px",
-            background: "rgba(239, 68, 68, 0.12)",
-            border: "1px solid rgba(239, 68, 68, 0.3)",
-            color: "#FCA5A5",
+            borderRadius: "var(--radius-md)",
+            background: "var(--accent-rose-bg)",
+            border: "1px solid rgba(225, 29, 72, 0.3)",
+            color: "var(--accent-rose)",
             marginBottom: "24px",
             display: "flex",
             alignItems: "center",
-            gap: "10px",
+            gap: "12px",
+            fontSize: "14px",
+            fontWeight: 500,
           }}
         >
-          <AlertTriangle size={18} color="#EF4444" />
+          <AlertTriangle size={18} color="var(--accent-rose)" style={{ flexShrink: 0 }} />
           <span>{errorMsg}</span>
         </div>
       )}
 
-      {/* Main 2-Column Grid */}
+      {/* Main 2-Column Responsive Workspace */}
       <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1.3fr", gap: "24px", alignItems: "start" }}>
         
-        {/* Left Column: Instant Call Dispatcher */}
-        <div className="card" style={{ padding: "24px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "18px" }}>
-            <PhoneCall size={20} color="#818CF8" />
-            <h2 style={{ fontSize: "18px", margin: 0 }}>Dispatch Instant Call</h2>
+        {/* Left Column: Instant Outbound Dispatch Console */}
+        <div className="glass-panel" style={{ padding: "28px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "20px", paddingBottom: "16px", borderBottom: "1px solid var(--border-subtle)" }}>
+            <PhoneForwarded size={20} color="#4F46E5" />
+            <h2 style={{ fontSize: "18px", margin: 0, color: "var(--text-primary)" }}>
+              Dispatch Outbound Call
+            </h2>
           </div>
 
           <form onSubmit={handleDispatch}>
-            {/* Phone Number */}
-            <div style={{ marginBottom: "16px" }}>
-              <label className="form-label">Recipient Phone Number (E.164 Format) *</label>
+            {/* Step 1: Select Existing Agent Dropdown */}
+            <div className="form-group">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                <label className="form-label" style={{ margin: 0 }}>
+                  Select Voice Agent *
+                </label>
+                <Link
+                  href="/agents"
+                  style={{ fontSize: "12px", color: "var(--accent-primary)", fontWeight: 600, textDecoration: "none", display: "flex", alignItems: "center", gap: "4px" }}
+                >
+                  <Plus size={12} /> New Agent
+                </Link>
+              </div>
+
+              {loadingAgents ? (
+                <div style={{ padding: "12px", fontSize: "13px", color: "var(--text-muted)" }}>
+                  Loading existing voice agents...
+                </div>
+              ) : agents.length === 0 ? (
+                <div
+                  style={{
+                    padding: "14px 16px",
+                    background: "var(--accent-amber-bg)",
+                    border: "1px solid rgba(217, 119, 6, 0.3)",
+                    borderRadius: "var(--radius-md)",
+                    fontSize: "13px",
+                    color: "#92400E",
+                  }}
+                >
+                  No existing agent. Create your agent first.
+                </div>
+              ) : (
+                <>
+                  <select
+                    className="form-select"
+                    value={selectedAgentId}
+                    onChange={(e) => handleSelectAgent(e.target.value)}
+                    required
+                  >
+                    {agents.map((ag) => (
+                      <option key={ag.id} value={ag.id}>
+                        {ag.name} ({ag.language_display || ag.primary_language || "Hindi/English"}) — {ag.purpose_display || ag.purpose}
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Selected Agent Quick Metadata Card */}
+                  {selectedAgent && (
+                    <div
+                      style={{
+                        marginTop: "10px",
+                        padding: "12px 14px",
+                        background: "#F8FAFC",
+                        borderRadius: "var(--radius-md)",
+                        border: "1px solid #E2E8F0",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <div
+                          style={{
+                            width: "32px",
+                            height: "32px",
+                            borderRadius: "8px",
+                            background: "#EEF2FF",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Bot size={18} color="#4F46E5" />
+                        </div>
+                        <div>
+                          <div style={{ fontSize: "13px", fontWeight: 700, color: "#1E293B" }}>
+                            {selectedAgent.name}
+                          </div>
+                          <div style={{ fontSize: "11px", color: "#64748B" }}>
+                            Voice Model: {selectedAgent.voice_model || "Bulbul v4"} · Speaker: {selectedAgent.speaker}
+                          </div>
+                        </div>
+                      </div>
+                      <span className="badge badge-connected" style={{ fontSize: "11px" }}>
+                        Ready to Dial
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Step 2: Recipient Phone Number */}
+            <div className="form-group">
+              <label className="form-label">
+                Recipient Phone Number (Indian E.164) *
+              </label>
               <input
                 type="text"
                 className="form-input"
@@ -354,58 +596,87 @@ export default function InstantOutboundPage() {
                 onChange={(e) => setPhone(e.target.value)}
                 required
               />
-              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>
-                Standard Indian E.164: Must start with +91 followed by 10 digits.
+              <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "6px" }}>
+                Format: Must start with <code>+91</code> followed by a 10-digit mobile number.
               </div>
             </div>
 
-            {/* Agent App ID & Version */}
-            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: "12px", marginBottom: "16px" }}>
-              <div>
-                <label className="form-label">Sarvam App ID</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="agent_sales_v1"
-                  value={appId}
-                  onChange={(e) => setAppId(e.target.value)}
-                />
+            {/* Step 3: Initial Bot Greeting (Opening Line Override) */}
+            <div className="form-group">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                <label className="form-label" style={{ margin: 0 }}>
+                  Opening Line / Greeting Message
+                </label>
+                {selectedAgent?.greeting_message && (
+                  <button
+                    type="button"
+                    onClick={() => setOpeningLine(selectedAgent.greeting_message)}
+                    style={{ background: "none", border: "none", color: "var(--accent-primary)", fontSize: "12px", cursor: "pointer", fontWeight: 600 }}
+                  >
+                    Reset to Agent Default
+                  </button>
+                )}
               </div>
-              <div>
-                <label className="form-label">App Version</label>
-                <input
-                  type="number"
-                  className="form-input"
-                  min="1"
-                  value={appVersion}
-                  onChange={(e) => setAppVersion(e.target.value)}
-                />
-              </div>
-            </div>
-
-            {/* Opening Line Override */}
-            <div style={{ marginBottom: "16px" }}>
-              <label className="form-label">Initial Bot Message (Opening Line Override)</label>
               <textarea
-                className="form-input"
-                rows={2}
-                placeholder="Optional: Hello, I am calling from Sevencore regarding your recent service inquiry."
+                className="form-textarea"
+                rows={3}
+                placeholder="Hello, I am calling from Sevencore Conversa regarding your service request..."
                 value={openingLine}
                 onChange={(e) => setOpeningLine(e.target.value)}
               />
+              <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>
+                Spoken aloud immediately when the customer picks up the call.
+              </div>
             </div>
 
-            {/* Dynamic Agent Variables */}
-            <div style={{ marginBottom: "20px" }}>
+            {/* Step 4: Dynamic Agent Variables */}
+            <div className="form-group">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                <label className="form-label" style={{ margin: 0 }}>Agent Variables (Prompt Context)</label>
+                <div>
+                  <label className="form-label" style={{ margin: 0 }}>
+                    Dynamic Agent Variables
+                  </label>
+                  <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                    Injected into prompt context (e.g. customer name, appointment time)
+                  </div>
+                </div>
                 <button
                   type="button"
                   onClick={handleAddVar}
-                  className="btn btn-secondary"
-                  style={{ padding: "4px 8px", fontSize: "11px" }}
+                  className="btn btn-secondary btn-sm"
                 >
-                  <Plus size={12} /> Add Variable
+                  <Plus size={12} /> Add Key-Value
+                </button>
+              </div>
+
+              {/* Quick Presets */}
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "12px" }}>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", alignSelf: "center", marginRight: "4px" }}>
+                  Presets:
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleApplyPreset("user_name", "Rahul")}
+                  className="badge"
+                  style={{ background: "#F1F5F9", color: "#334155", border: "1px solid #CBD5E1", cursor: "pointer" }}
+                >
+                  + user_name
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyPreset("company_name", "Acme Retail")}
+                  className="badge"
+                  style={{ background: "#F1F5F9", color: "#334155", border: "1px solid #CBD5E1", cursor: "pointer" }}
+                >
+                  + company_name
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyPreset("due_amount", "₹1,250")}
+                  className="badge"
+                  style={{ background: "#F1F5F9", color: "#334155", border: "1px solid #CBD5E1", cursor: "pointer" }}
+                >
+                  + due_amount
                 </button>
               </div>
 
@@ -414,7 +685,7 @@ export default function InstantOutboundPage() {
                   <input
                     type="text"
                     className="form-input"
-                    placeholder="Variable Key (e.g. user_name)"
+                    placeholder="Key (e.g. user_name)"
                     value={item.key}
                     onChange={(e) => handleVarChange(idx, "key", e.target.value)}
                     style={{ flex: 1 }}
@@ -425,13 +696,14 @@ export default function InstantOutboundPage() {
                     placeholder="Value (e.g. Asha)"
                     value={item.val}
                     onChange={(e) => handleVarChange(idx, "val", e.target.value)}
-                    style={{ flex: 1.2 }}
+                    style={{ flex: 1.3 }}
                   />
                   <button
                     type="button"
                     onClick={() => handleRemoveVar(idx)}
-                    className="btn btn-secondary"
-                    style={{ padding: "8px", color: "var(--danger)" }}
+                    className="btn btn-secondary btn-sm"
+                    style={{ color: "var(--accent-rose)", padding: "8px 10px" }}
+                    title="Remove variable"
                   >
                     <Trash2 size={14} />
                   </button>
@@ -439,50 +711,83 @@ export default function InstantOutboundPage() {
               ))}
             </div>
 
-            {/* Compliance Override Option */}
-            <div style={{ marginBottom: "20px", padding: "12px 14px", background: "rgba(255,255,255,0.03)", borderRadius: "8px" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "13px", color: "var(--text-secondary)" }}>
+            {/* Compliance Override Checkbox */}
+            <div
+              style={{
+                marginBottom: "24px",
+                padding: "14px 16px",
+                background: "#F8FAFC",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-subtle)",
+              }}
+            >
+              <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer" }}>
                 <input
                   type="checkbox"
                   checked={bypassWindow}
                   onChange={(e) => setBypassWindow(e.target.checked)}
+                  style={{ marginTop: "3px", width: "16px", height: "16px", accentColor: "#4F46E5" }}
                 />
-                <span>Bypass TRAI Call Window Guard (for development testing only)</span>
+                <div>
+                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>
+                    Bypass TRAI Call Window Guard (09:00 - 20:00 IST)
+                  </div>
+                  <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
+                    Enables dialing outside regulatory calling hours for development testing on internal numbers.
+                  </div>
+                </div>
               </label>
             </div>
 
-            {/* Submit Button */}
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={submitting}
-              style={{ width: "100%", justifyContent: "center", padding: "12px" }}
-            >
-              {submitting ? (
-                <>
-                  <RefreshCw size={16} className="spin" /> Dispatching Call...
-                </>
-              ) : (
-                <>
-                  <PhoneCall size={16} /> Place Outbound Call Now
-                </>
-              )}
-            </button>
+            {/* Action Buttons */}
+            {agents.length === 0 ? (
+              <Link
+                href="/agents"
+                className="btn btn-primary btn-lg"
+                style={{ width: "100%", justifyContent: "center" }}
+              >
+                <Plus size={18} /> Create Your Agent First
+              </Link>
+            ) : (
+              <button
+                type="submit"
+                className="btn btn-primary btn-lg"
+                disabled={submitting || agents.length === 0}
+                style={{ width: "100%", justifyContent: "center" }}
+              >
+                {submitting ? (
+                  <>
+                    <RefreshCw size={18} className="spin" /> Dispatching Outbound Call...
+                  </>
+                ) : (
+                  <>
+                    <PhoneCall size={18} /> Place Instant Outbound Call
+                  </>
+                )}
+              </button>
+            )}
           </form>
         </div>
 
-        {/* Right Column: Live Job Inspector */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
+        {/* Right Column: Live Call Inspector & Real-time History */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "24px" }}>
+          
+          {/* Active Call Inspector Card */}
           {activeJob ? (
-            <div className="card" style={{ padding: "24px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px" }}>
+            <div className="glass-panel" style={{ padding: "28px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "18px" }}>
                 <div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", fontWeight: 700 }}>
-                    Active Call Inspection
+                  <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                    Live Call Session
                   </div>
-                  <h3 style={{ fontSize: "18px", margin: "4px 0 0" }}>{activeJob.phone}</h3>
+                  <h3 style={{ fontSize: "20px", fontWeight: 700, color: "var(--text-primary)", margin: "4px 0 2px" }}>
+                    {activeJob.phone}
+                  </h3>
+                  <div style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+                    Agent: <strong style={{ color: "var(--text-primary)" }}>{activeJob.agent_name || activeJob.app_id}</strong>
+                  </div>
                 </div>
-                {getStateBadge(activeJob.state)}
+                <div>{getStateBadge(activeJob.state)}</div>
               </div>
 
               {/* Status details grid */}
@@ -491,37 +796,50 @@ export default function InstantOutboundPage() {
                   display: "grid",
                   gridTemplateColumns: "repeat(3, 1fr)",
                   gap: "12px",
-                  padding: "14px",
-                  background: "rgba(15, 23, 42, 0.6)",
-                  borderRadius: "8px",
-                  marginBottom: "16px",
-                  border: "1px solid rgba(255, 255, 255, 0.05)",
+                  padding: "16px",
+                  background: "#F8FAFC",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--border-subtle)",
+                  marginBottom: "20px",
                 }}
               >
                 <div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Job ID</div>
-                  <div style={{ fontSize: "12px", fontFamily: "monospace", color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>Job ID</div>
+                  <div style={{ fontSize: "12px", fontFamily: "monospace", color: "#334155", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                     {activeJob.job_id}
                   </div>
                 </div>
+
                 <div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Sarvam Attempt ID</div>
-                  <div style={{ fontSize: "12px", fontFamily: "monospace", color: "#818CF8" }}>
-                    {activeJob.attempt_id || "Not assigned yet"}
+                  <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>Sarvam Attempt ID</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ fontSize: "12px", fontFamily: "monospace", color: "#4F46E5", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {activeJob.attempt_id ? activeJob.attempt_id.slice(0, 14) + "..." : "Awaiting..."}
+                    </span>
+                    {activeJob.attempt_id && (
+                      <button
+                        onClick={() => copyToClipboard(activeJob.attempt_id!, "att")}
+                        style={{ background: "none", border: "none", cursor: "pointer", padding: "2px", color: "#64748B" }}
+                        title="Copy Attempt ID"
+                      >
+                        {copiedId === "att" ? <Check size={12} color="#059669" /> : <Copy size={12} />}
+                      </button>
+                    )}
                   </div>
                 </div>
+
                 <div>
-                  <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>Duration</div>
-                  <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-primary)" }}>
-                    {activeJob.duration !== undefined ? `${activeJob.duration}s` : "Pending..."}
+                  <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>Duration</div>
+                  <div style={{ fontSize: "14px", fontWeight: 700, color: "#0F172A" }}>
+                    {activeJob.duration !== undefined ? `${activeJob.duration}s` : "In Progress"}
                   </div>
                 </div>
               </div>
 
-              {/* Chronological History Steps */}
-              <div style={{ marginBottom: "16px" }}>
-                <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", marginBottom: "10px" }}>
-                  Execution Timeline & Guard Transitions
+              {/* Timeline of State Transitions */}
+              <div style={{ marginBottom: "20px" }}>
+                <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: "12px" }}>
+                  Timeline & Regulatory Guard Verification
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                   {activeJob.history.map((step, idx) => (
@@ -529,19 +847,23 @@ export default function InstantOutboundPage() {
                       key={idx}
                       style={{
                         padding: "10px 14px",
-                        borderRadius: "6px",
-                        background: "rgba(255, 255, 255, 0.03)",
-                        borderLeft: "3px solid #6366F1",
-                        fontSize: "12px",
+                        borderRadius: "8px",
+                        background: "#F8FAFC",
+                        borderLeft: "3px solid #4F46E5",
+                        borderTop: "1px solid var(--border-subtle)",
+                        borderRight: "1px solid var(--border-subtle)",
+                        borderBottom: "1px solid var(--border-subtle)",
                       }}
                     >
-                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "3px" }}>
-                        <strong style={{ color: "#818CF8" }}>{step.action}</strong>
-                        <span style={{ color: "var(--text-muted)", fontSize: "10px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "3px" }}>
+                        <span style={{ fontWeight: 700, fontSize: "13px", color: "#1E293B" }}>
+                          {step.action}
+                        </span>
+                        <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>
                           {new Date(step.timestamp).toLocaleTimeString()}
                         </span>
                       </div>
-                      <div style={{ color: "var(--text-secondary)", fontFamily: "monospace", fontSize: "11px" }}>
+                      <div style={{ fontSize: "12px", fontFamily: "monospace", color: "#64748B" }}>
                         {typeof step.details === "object" ? JSON.stringify(step.details) : String(step.details)}
                       </div>
                     </div>
@@ -549,51 +871,110 @@ export default function InstantOutboundPage() {
                 </div>
               </div>
 
-              {/* Transcript Display if Available */}
+              {/* Turn-by-Turn Audio Transcript if fetched */}
               {activeJob.transcript && (
-                <div style={{ padding: "14px", background: "rgba(16, 185, 129, 0.08)", border: "1px solid rgba(16, 185, 129, 0.2)", borderRadius: "8px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px", color: "#34D399", fontWeight: 600, fontSize: "13px" }}>
-                    <FileText size={16} /> Transcript Fetched from Sarvam Analytics API
+                <div style={{ marginTop: "20px", paddingTop: "18px", borderTop: "1px solid var(--border-subtle)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+                    <FileText size={16} color="#059669" />
+                    <h4 style={{ margin: 0, fontSize: "14px", fontWeight: 700, color: "#0F172A" }}>
+                      Turn-by-Turn Conversation Transcript
+                    </h4>
                   </div>
-                  <pre style={{ margin: 0, fontSize: "11px", color: "#D1FAE5", maxHeight: "150px", overflowY: "auto" }}>
-                    {JSON.stringify(activeJob.transcript, null, 2)}
-                  </pre>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "280px", overflowY: "auto", paddingRight: "4px" }}>
+                    {Array.isArray(activeJob.transcript?.turns) && activeJob.transcript.turns.length > 0 ? (
+                      activeJob.transcript.turns.map((turn: any, tIdx: number) => {
+                        const isAssistant = turn.role === "agent" || turn.role === "assistant";
+                        return (
+                          <div
+                            key={tIdx}
+                            className={`turn-bubble ${isAssistant ? "turn-assistant" : "turn-user"}`}
+                            style={{ margin: 0 }}
+                          >
+                            <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "4px", fontSize: "11px", fontWeight: 700, color: isAssistant ? "#4338CA" : "#334155" }}>
+                              {isAssistant ? <Bot size={13} /> : <User size={13} />}
+                              <span>{isAssistant ? (activeJob.agent_name || "Voice Agent") : "Customer"}</span>
+                            </div>
+                            <div>{turn.text || turn.content || turn.en_text || JSON.stringify(turn)}</div>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <pre style={{ margin: 0, fontSize: "12px", padding: "12px", background: "#F8FAFC", borderRadius: "8px", overflowX: "auto" }}>
+                        {JSON.stringify(activeJob.transcript, null, 2)}
+                      </pre>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
           ) : (
-            <div className="card" style={{ padding: "40px", textAlign: "center", color: "var(--text-muted)" }}>
-              <PhoneCall size={36} color="var(--text-muted)" style={{ margin: "0 auto 12px" }} />
-              <div>No active call job selected. Dispatch a call using the form to see real-time updates.</div>
+            <div
+              className="glass-panel"
+              style={{ padding: "48px 32px", textAlign: "center", color: "var(--text-muted)" }}
+            >
+              <div
+                style={{
+                  width: "56px",
+                  height: "56px",
+                  borderRadius: "16px",
+                  background: "#F1F5F9",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  margin: "0 auto 16px",
+                }}
+              >
+                <PhoneCall size={26} color="#94A3B8" />
+              </div>
+              <h3 style={{ fontSize: "16px", color: "var(--text-primary)", marginBottom: "6px" }}>
+                Ready to Dispatch
+              </h3>
+              <p style={{ margin: 0, fontSize: "13px", maxWidth: "340px", marginInline: "auto" }}>
+                Select a Voice Agent and enter a recipient phone number on the left to initiate a live outbound call and track its progress here.
+              </p>
             </div>
           )}
 
-          {/* Recent Jobs Mini-Table */}
-          <div className="card" style={{ padding: "20px" }}>
-            <h4 style={{ fontSize: "14px", margin: "0 0 12px" }}>Recent Calls in Session</h4>
+          {/* Recent Dispatches Mini-Table */}
+          <div className="glass-panel" style={{ padding: "24px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+              <h4 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "var(--text-primary)" }}>
+                Recent Calls in This Session
+              </h4>
+              <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                {recentJobs.length} {recentJobs.length === 1 ? "call" : "calls"}
+              </span>
+            </div>
+
             {recentJobs.length === 0 ? (
-              <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>No previous calls dispatched yet.</div>
+              <div style={{ fontSize: "13px", color: "var(--text-muted)", padding: "12px 0" }}>
+                No calls dispatched yet.
+              </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
                 {recentJobs.map((j) => (
                   <div
                     key={j.job_id}
                     onClick={() => setActiveJob(j)}
                     style={{
-                      padding: "10px 12px",
-                      borderRadius: "6px",
-                      background: activeJob?.job_id === j.job_id ? "rgba(99, 102, 241, 0.15)" : "rgba(255, 255, 255, 0.02)",
-                      border: activeJob?.job_id === j.job_id ? "1px solid #6366F1" : "1px solid transparent",
+                      padding: "12px 14px",
+                      borderRadius: "var(--radius-md)",
+                      background: activeJob?.job_id === j.job_id ? "#EEF2FF" : "#F8FAFC",
+                      border: activeJob?.job_id === j.job_id ? "1px solid #6366F1" : "1px solid var(--border-subtle)",
                       cursor: "pointer",
                       display: "flex",
                       justifyContent: "space-between",
                       alignItems: "center",
+                      transition: "all 0.15s ease",
                     }}
                   >
                     <div>
-                      <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-primary)" }}>{j.phone}</div>
-                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
-                        {new Date(j.created_at).toLocaleTimeString()} · Attempts: {j.attempts}
+                      <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
+                        {j.phone}
+                      </div>
+                      <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>
+                        {j.agent_name || j.app_id} · {new Date(j.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                       </div>
                     </div>
                     <div>{getStateBadge(j.state)}</div>
@@ -602,6 +983,7 @@ export default function InstantOutboundPage() {
               </div>
             )}
           </div>
+
         </div>
 
       </div>

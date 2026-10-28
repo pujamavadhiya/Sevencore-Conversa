@@ -137,3 +137,50 @@ class CampaignViewSet(viewsets.ModelViewSet):
         contacts = campaign.campaign_contacts.select_related("contact").order_by("-id")
         serializer = CampaignContactSerializer(contacts, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["post"])
+    def dispatch_followups(self, request, pk=None):
+        """
+        Triggers a follow-up batch cohort dispatch for all eligible pending follow-up contacts in this campaign.
+        Injects followup_reason, followup_round, and previous_conversation variables.
+        """
+        campaign = self.get_object()
+        label = request.data.get("label")
+        result = CampaignExecutionEngine.dispatch_followup_cohort(campaign, batch_label=label)
+        return Response(result)
+
+    @action(detail=True, methods=["get"])
+    def followups(self, request, pk=None):
+        """
+        Returns all follow-up contacts grouped or filtered by status.
+        """
+        campaign = self.get_object()
+        status_param = request.query_params.get("status")
+        qs = campaign.campaign_contacts.select_related("contact").order_by("-updated_at")
+        if status_param:
+            qs = qs.filter(followup_status=status_param)
+        else:
+            qs = qs.exclude(followup_status="pending")
+        serializer = CampaignContactSerializer(qs, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["post"])
+    def dispatch_all_due(self, request):
+        """
+        Global scheduler endpoint: dispatches eligible follow-ups across all active campaigns.
+        Can be called by Celery beat, cron, or manual trigger.
+        """
+        active_campaigns = Campaign.objects.filter(status__in=["running", "completed"])
+        total_queued = 0
+        campaign_results = []
+        for camp in active_campaigns:
+            res = CampaignExecutionEngine.dispatch_followup_cohort(camp)
+            if res.get("queued", 0) > 0:
+                total_queued += res["queued"]
+                campaign_results.append({"campaign_id": camp.id, "queued": res["queued"]})
+
+        return Response({
+            "success": True,
+            "total_queued": total_queued,
+            "campaigns": campaign_results,
+        })
