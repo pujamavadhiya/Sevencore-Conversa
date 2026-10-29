@@ -30,6 +30,7 @@ class VoiceAgentSerializer(serializers.ModelSerializer):
             "max_conversation_duration_seconds",
             "greeting_message",
             "system_instructions",
+            "config",
             "knowledge_files",
             "is_active",
             "created_at",

@@ -54,6 +54,11 @@ class VoiceAgent(models.Model):
         default=600,
         help_text="Maximum allowed call duration in seconds (e.g. 600 = 10 minutes)"
     )
+    config = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Extended agent configuration including speaking voices, listening, environment, language personalisation, and in-call actions"
+    )
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

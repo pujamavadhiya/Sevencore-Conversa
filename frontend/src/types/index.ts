@@ -8,6 +8,45 @@ export interface Organization {
   created_at: string;
 }
 
+export interface AgentLanguageVoiceOverride {
+  language: string;
+  voice: string;
+}
+
+export interface AgentNudgeMessage {
+  message: string;
+  after_seconds: number;
+}
+
+export interface AgentConfig {
+  speaking_speed?: number;
+  pitch?: number;
+  volume?: number;
+  pronunciation_dictionary?: string;
+  model_temperature?: "Conservative" | "Balanced" | "Creative";
+  knowledge_base_ids?: number[];
+  interruptible?: boolean;
+  eagerness?: "Patient" | "Balanced" | "Fast" | "Immediate";
+  volume_threshold?: "Low" | "Normal" | "High";
+  background_sound?: "None" | "Quiet office" | "Call center" | "Café";
+  background_volume?: number;
+  switch_language_during_call?: boolean;
+  languages_allowed?: string[];
+  auto_detect_language?: boolean;
+  switch_after?: "Quick" | "Normal" | "Cautious";
+  starting_language?: string;
+  output_numbers_in_indic?: boolean;
+  nudge_quiet_callers?: boolean;
+  nudges?: AgentNudgeMessage[];
+  hangup_after_unanswered_nudges?: boolean;
+  voicemail_detection?: boolean;
+  voicemail_message?: string;
+  call_forwarding?: boolean;
+  forwarding_number?: string;
+  max_call_length_minutes?: number;
+  per_language_voices?: AgentLanguageVoiceOverride[];
+}
+
 export interface VoiceAgent {
   id: number;
   organization: number;
@@ -25,6 +64,7 @@ export interface VoiceAgent {
   greeting_message: string;
   system_instructions: string;
   knowledge_files?: any[];
+  config?: AgentConfig;
   is_active: boolean;
   created_at: string;
 }

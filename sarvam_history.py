@@ -2,16 +2,7 @@
 Sarvam Call History & Transcript Pipeline.
 Keeps single calls and batch campaigns strictly separated.
 """
-from backend.sarvam_history import (
-    app,
-    router,
-    init_db,
-    start_workers,
-    ingest_webhook,
-    register_campaign,
-    pull_transcript,
-    sync_attempts,
-)
+from backend.sarvam_history import *
 
 if __name__ == "__main__":
     import uvicorn

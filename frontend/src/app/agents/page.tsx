@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Bot,
   Plus,
@@ -312,9 +314,13 @@ export default function AgentsPage() {
             Configure agent names, conversational timeouts, Sarvam Bulbul voices with audio testing, opening messages, system prompts, and ground them with your Knowledge Base.
           </p>
         </div>
-        <button className="btn btn-primary" onClick={() => openSetupModal()}>
+        <Link
+          href="/agents/new"
+          className="btn btn-primary"
+          style={{ display: "flex", alignItems: "center", gap: "6px" }}
+        >
           <Plus size={16} /> New Agent Setup
-        </button>
+        </Link>
       </div>
 
       {/* Pre-built Templates */}
@@ -346,9 +352,9 @@ export default function AgentsPage() {
                   {tpl.greeting_message.slice(0, 75)}...
                 </p>
               </div>
-              <button className="btn btn-secondary btn-sm" onClick={() => openSetupModal(undefined, tpl)}>
-                Apply This Preset
-              </button>
+              <Link href="/agents/new" className="btn btn-secondary btn-sm" style={{ textAlign: "center" }}>
+                Use This Preset
+              </Link>
             </div>
           ))}
         </div>
@@ -377,14 +383,14 @@ export default function AgentsPage() {
                       </span>
                     </div>
                     <div style={{ display: "flex", gap: "8px" }}>
-                      <button
-                        onClick={() => openSetupModal(ag)}
+                      <Link
+                        href={`/agents/${ag.id}/edit`}
                         className="btn btn-secondary btn-sm"
-                        style={{ padding: "4px 8px" }}
+                        style={{ padding: "4px 8px", display: "inline-flex", alignItems: "center", gap: "4px" }}
                         title="Edit Agent Setup"
                       >
                         <Edit size={14} />
-                      </button>
+                      </Link>
                       <button
                         onClick={() => handleDelete(ag.id)}
                         style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer" }}

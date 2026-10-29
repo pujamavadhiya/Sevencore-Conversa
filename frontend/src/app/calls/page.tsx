@@ -24,13 +24,18 @@ import {
   Radio,
   Layers,
   History,
+  Volume2,
+  Play,
+  Languages,
+  Calendar,
+  Activity,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { HistoryCampaignSummary, HistoryCallItem } from "@/types";
 
 export default function CallsHistoryPage() {
-  // Top-level View Mode: "campaigns" vs "single"
-  const [activeTab, setActiveTab] = useState<"campaigns" | "single">("campaigns");
+  // Top-level View Mode: "campaigns" vs "single" vs "live"
+  const [activeTab, setActiveTab] = useState<"campaigns" | "single" | "live">("campaigns");
 
   // Campaigns History States
   const [campaignsList, setCampaignsList] = useState<HistoryCampaignSummary[]>([]);
@@ -59,6 +64,18 @@ export default function CallsHistoryPage() {
   const [userHistoryList, setUserHistoryList] = useState<HistoryCallItem[] | null>(null);
   const [selectedUserUid, setSelectedUserUid] = useState<string | null>(null);
 
+  // Live Analytics (On-Demand) States
+  const [liveKind, setLiveKind] = useState<"attempts" | "interactions">("attempts");
+  const [liveStart, setLiveStart] = useState("");
+  const [liveEnd, setLiveEnd] = useState("");
+  const [liveStatus, setLiveStatus] = useState("");
+  const [liveCampaignId, setLiveCampaignId] = useState("");
+  const [liveMinDuration, setLiveMinDuration] = useState("");
+  const [liveResults, setLiveResults] = useState<any[]>([]);
+  const [searchingLive, setSearchingLive] = useState(false);
+  const [liveSearchTitle, setLiveSearchTitle] = useState("Live Attempts");
+  const [activeTranscriptTab, setActiveTranscriptTab] = useState<"original" | "translated">("original");
+
   // Load data on tab change or filter change
   useEffect(() => {
     if (activeTab === "campaigns") {
@@ -67,7 +84,7 @@ export default function CallsHistoryPage() {
       } else {
         loadActiveCampaignCalls(activeCampaign.campaign_id);
       }
-    } else {
+    } else if (activeTab === "single") {
       loadSingleCallsHistory();
     }
   }, [activeTab, activeCampaign?.campaign_id, dispositionFilter, reasonFilter, search]);
@@ -123,14 +140,72 @@ export default function CallsHistoryPage() {
 
   const openCallDetail = async (attemptId: string) => {
     setSelectedAttemptId(attemptId);
+    setActiveTranscriptTab("original");
     try {
       setLoadingDetail(true);
-      const detail = await api.getHistoryCallDetail(attemptId);
-      setCallDetailData(detail);
+      try {
+        const full = await api.getHistoryCallFull(attemptId);
+        setCallDetailData(full);
+      } catch {
+        const detail = await api.getHistoryCallDetail(attemptId);
+        setCallDetailData(detail);
+      }
     } catch (err) {
       console.error("Failed to fetch call detail:", err);
     } finally {
       setLoadingDetail(false);
+    }
+  };
+
+  const handleSearchLive = async () => {
+    try {
+      setSearchingLive(true);
+      const params: Record<string, any> = {};
+      if (liveStart) params.start = new Date(liveStart).toISOString();
+      if (liveEnd) params.end = new Date(liveEnd).toISOString();
+      if (liveStatus) params.status = liveStatus;
+      if (liveCampaignId) params.campaign_id = liveCampaignId;
+      if (liveMinDuration) params.min_duration = Number(liveMinDuration);
+
+      if (liveKind === "attempts") {
+        setLiveSearchTitle("Live Call Attempts (Sarvam Analytics API)");
+        const res = await api.getLiveAttempts(params);
+        setLiveResults(res.items || []);
+      } else {
+        setLiveSearchTitle("Live Interactions (Sarvam Analytics API)");
+        const res = await api.getLiveInteractions(params);
+        setLiveResults(res.items || []);
+      }
+    } catch (err) {
+      console.error("Failed to query live analytics:", err);
+      alert("Failed to query live Sarvam Analytics API. Check agent configuration or parameters.");
+    } finally {
+      setSearchingLive(false);
+    }
+  };
+
+  const handleLoadQASample = async () => {
+    try {
+      setSearchingLive(true);
+      setLiveSearchTitle("QA Quality Sample (Short Calls, Failures & Drop-offs)");
+      const res = await api.getQASample({ n: 15 });
+      const items = Array.isArray(res) ? res : (res.items || []);
+      setLiveResults(
+        items.map((i: any) => ({
+          ...i,
+          _qa_reason:
+            i.disposition === "followup"
+              ? "Follow-up Cohort"
+              : i.duration && i.duration < 25
+              ? `Short Call (${i.duration}s)`
+              : "Failed / Drop-off",
+        }))
+      );
+    } catch (err) {
+      console.error("Failed to load QA sample:", err);
+      alert("Failed to load QA sample.");
+    } finally {
+      setSearchingLive(false);
     }
   };
 
@@ -306,6 +381,33 @@ export default function CallsHistoryPage() {
               }}
             >
               {singleCallsTotal}
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab("live");
+            setActiveCampaign(null);
+            if (liveResults.length === 0) {
+              handleSearchLive();
+            }
+          }}
+          className={`btn ${activeTab === "live" ? "btn-primary" : "btn-secondary"}`}
+          style={{ padding: "8px 16px", fontSize: "14px", fontWeight: 600 }}
+        >
+          <Search size={16} /> Search Live Analytics (On-Demand)
+          {liveResults.length > 0 && (
+            <span
+              style={{
+                marginLeft: "6px",
+                padding: "2px 8px",
+                borderRadius: "10px",
+                background: activeTab === "live" ? "rgba(255,255,255,0.25)" : "#E2E8F0",
+                fontSize: "11px",
+              }}
+            >
+              {liveResults.length}
             </span>
           )}
         </button>
@@ -742,6 +844,280 @@ export default function CallsHistoryPage() {
       )}
 
       {/* =========================================================================
+          SECTION 3: ON-DEMAND LIVE ANALYTICS SEARCH & QA SAMPLING
+          ========================================================================= */}
+      {activeTab === "live" && (
+        <div>
+          {/* Header & Controls Card */}
+          <div className="card" style={{ padding: "20px", marginBottom: "20px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "16px", flexWrap: "wrap", gap: "12px" }}>
+              <div>
+                <h2 style={{ fontSize: "18px", margin: 0, display: "flex", alignItems: "center", gap: "8px" }}>
+                  <Search size={18} color="#4F46E5" /> On-Demand Sarvam Analytics Search
+                </h2>
+                <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "4px" }}>
+                  Query Sarvam's live Analytics endpoints directly (PII masked, filter by status, duration, campaign) or inspect QA quality samples.
+                </div>
+              </div>
+
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={handleLoadQASample}
+                  disabled={searchingLive}
+                  className="btn btn-secondary"
+                  style={{ display: "flex", alignItems: "center", gap: "6px" }}
+                >
+                  <Activity size={14} color="#D97706" /> QA Quality Sample
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSearchLive}
+                  disabled={searchingLive}
+                  className="btn btn-primary"
+                  style={{ display: "flex", alignItems: "center", gap: "6px" }}
+                >
+                  {searchingLive ? <RefreshCw size={14} className="spin" /> : <Search size={14} />}
+                  Run Live Search
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Bar */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px", alignItems: "flex-end" }}>
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  Analytics Entity
+                </label>
+                <select
+                  className="form-control"
+                  value={liveKind}
+                  onChange={(e) => setLiveKind(e.target.value as "attempts" | "interactions")}
+                  style={{ width: "100%", padding: "7px 10px", fontSize: "13px" }}
+                >
+                  <option value="attempts">Call Attempts (/attempts)</option>
+                  <option value="interactions">Interactions (/interactions)</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  Call Status
+                </label>
+                <select
+                  className="form-control"
+                  value={liveStatus}
+                  onChange={(e) => setLiveStatus(e.target.value)}
+                  style={{ width: "100%", padding: "7px 10px", fontSize: "13px" }}
+                >
+                  <option value="">All Statuses</option>
+                  <option value="connected">Connected</option>
+                  <option value="busy">Busy</option>
+                  <option value="no_answer">No Answer</option>
+                  <option value="failed">Failed</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  Campaign ID
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. camp_101 or UUID"
+                  className="form-control"
+                  value={liveCampaignId}
+                  onChange={(e) => setLiveCampaignId(e.target.value)}
+                  style={{ width: "100%", padding: "7px 10px", fontSize: "13px" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  Min Duration (sec)
+                </label>
+                <input
+                  type="number"
+                  placeholder="e.g. 10"
+                  className="form-control"
+                  value={liveMinDuration}
+                  onChange={(e) => setLiveMinDuration(e.target.value)}
+                  style={{ width: "100%", padding: "7px 10px", fontSize: "13px" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  Start Time (UTC)
+                </label>
+                <input
+                  type="datetime-local"
+                  className="form-control"
+                  value={liveStart}
+                  onChange={(e) => setLiveStart(e.target.value)}
+                  style={{ width: "100%", padding: "6px 8px", fontSize: "12px" }}
+                />
+              </div>
+
+              <div>
+                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-secondary)", display: "block", marginBottom: "4px" }}>
+                  End Time (UTC)
+                </label>
+                <input
+                  type="datetime-local"
+                  className="form-control"
+                  value={liveEnd}
+                  onChange={(e) => setLiveEnd(e.target.value)}
+                  style={{ width: "100%", padding: "6px 8px", fontSize: "12px" }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Results Table */}
+          <div className="table-container">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", borderBottom: "1px solid var(--border-subtle)" }}>
+              <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text-primary)" }}>
+                {liveSearchTitle} ({liveResults.length} records)
+              </div>
+              <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                PII scrubbed & masked automatically
+              </div>
+            </div>
+
+            <table className="data-table">
+              <thead>
+                <tr>
+                  {liveKind === "attempts" ? (
+                    <>
+                      <th>Recipient (Masked)</th>
+                      <th>Attempt ID</th>
+                      <th>Status</th>
+                      <th>Duration</th>
+                      <th>Executed At</th>
+                      <th>Flags / QA</th>
+                      <th>Actions</th>
+                    </>
+                  ) : (
+                    <>
+                      <th>Interaction ID</th>
+                      <th>Agent ID</th>
+                      <th>Status</th>
+                      <th>Duration</th>
+                      <th>Start Time</th>
+                      <th>Flags / QA</th>
+                      <th>Actions</th>
+                    </>
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {searchingLive ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                      <RefreshCw size={20} className="spin" style={{ margin: "0 auto 10px" }} />
+                      Querying Sarvam Analytics API live...
+                    </td>
+                  </tr>
+                ) : liveResults.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} style={{ textAlign: "center", padding: "40px", color: "var(--text-muted)" }}>
+                      No live analytics records found matching criteria. Click "Run Live Search" or "QA Quality Sample".
+                    </td>
+                  </tr>
+                ) : (
+                  liveResults.map((item, idx) => {
+                    const isAttempt = Boolean(item.attempt_id);
+                    return (
+                      <tr key={idx}>
+                        {isAttempt ? (
+                          <>
+                            <td style={{ fontWeight: 600, color: "var(--text-primary)", fontFamily: "monospace" }}>
+                              {item.user_contact || item.user_contact_masked || "Masked Recipient"}
+                            </td>
+                            <td style={{ fontFamily: "monospace", fontSize: "12px" }}>
+                              {item.attempt_id ? `${item.attempt_id.slice(0, 16)}...` : "—"}
+                            </td>
+                            <td>
+                              <span className={`badge ${item.status === "connected" ? "badge-connected" : "badge-running"}`}>
+                                {item.status}
+                              </span>
+                            </td>
+                            <td>{item.duration ? `${item.duration}s` : "0s"}</td>
+                            <td style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                              {item.executed_at ? new Date(item.executed_at).toLocaleString() : "—"}
+                            </td>
+                            <td>
+                              {item._qa_reason ? (
+                                <span className="badge badge-warning" style={{ fontSize: "10px" }}>
+                                  {item._qa_reason}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Live</span>
+                              )}
+                            </td>
+                            <td>
+                              <button
+                                onClick={() => openCallDetail(item.attempt_id)}
+                                className="btn btn-secondary btn-sm"
+                                style={{ display: "flex", alignItems: "center", gap: "4px" }}
+                              >
+                                <FileText size={12} /> Full Joined Call
+                              </button>
+                            </td>
+                          </>
+                        ) : (
+                          <>
+                            <td style={{ fontWeight: 600, color: "var(--text-primary)", fontFamily: "monospace", fontSize: "12px" }}>
+                              {item.interaction_id}
+                            </td>
+                            <td style={{ fontFamily: "monospace", fontSize: "12px" }}>
+                              {item.agent_id ? `${item.agent_id.slice(0, 12)}...` : "—"}
+                            </td>
+                            <td>
+                              <span className={`badge ${item.status === "completed" || item.status === "connected" ? "badge-connected" : "badge-running"}`}>
+                                {item.status}
+                              </span>
+                            </td>
+                            <td>{item.duration ? `${item.duration}s` : "0s"}</td>
+                            <td style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+                              {item.start_time ? new Date(item.start_time).toLocaleString() : "—"}
+                            </td>
+                            <td>
+                              {item._qa_reason ? (
+                                <span className="badge badge-warning" style={{ fontSize: "10px" }}>
+                                  {item._qa_reason}
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: "11px", color: "var(--text-muted)" }}>Interaction</span>
+                              )}
+                            </td>
+                            <td>
+                              {item.interaction_id ? (
+                                <a
+                                  href={`http://localhost:8000/api/v1/history/interactions/${encodeURIComponent(item.interaction_id)}/recording/`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="btn btn-secondary btn-sm"
+                                  style={{ display: "inline-flex", alignItems: "center", gap: "4px" }}
+                                >
+                                  <Volume2 size={12} /> Stream WAV
+                                </a>
+                              ) : "—"}
+                            </td>
+                          </>
+                        )}
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
           MODAL: CALL DETAIL & ON-DEMAND TRANSCRIPT GENERATOR
           ========================================================================= */}
       {selectedAttemptId && (
@@ -818,40 +1194,136 @@ export default function CallsHistoryPage() {
                   </div>
                 </div>
 
+                {/* Inline Audio Player if recording is available */}
+                {callDetailData.recording_url && (
+                  <div
+                    style={{
+                      padding: "12px 16px",
+                      background: "#F8FAFC",
+                      borderRadius: "8px",
+                      border: "1px solid #E2E8F0",
+                      marginBottom: "18px",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: "12px",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      <div
+                        style={{
+                          width: "32px",
+                          height: "32px",
+                          borderRadius: "50%",
+                          background: "#4F46E5",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        <Volume2 size={16} color="#FFFFFF" />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-primary)" }}>
+                          Call Audio Recording
+                        </div>
+                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>
+                          Full interaction WAV stream with HTTP Range seeking
+                        </div>
+                      </div>
+                    </div>
+                    <audio
+                      controls
+                      src={callDetailData.recording_url}
+                      style={{ height: "36px", outline: "none", minWidth: "260px" }}
+                    >
+                      Your browser does not support the audio element.
+                    </audio>
+                  </div>
+                )}
+
                 {/* Transcript Header & On-Demand Generator */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px", flexWrap: "wrap", gap: "8px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <FileText size={16} color="#059669" />
                     <h4 style={{ margin: 0, fontSize: "15px", fontWeight: 700, color: "var(--text-primary)" }}>
-                      Conversation Transcript
+                      Conversation Dialogue
                     </h4>
                     <span className="badge badge-connected" style={{ fontSize: "10px" }}>
                       {callDetailData.transcript_status}
                     </span>
                   </div>
 
-                  {callDetailData.transcript_status !== "ready" && (
-                    <button
-                      onClick={() => handlePullTranscriptOnDemand(callDetailData.attempt_id)}
-                      disabled={fetchingTranscript}
-                      className="btn btn-secondary btn-sm"
-                      style={{ fontSize: "12px" }}
-                    >
-                      {fetchingTranscript ? (
-                        <>
-                          <RefreshCw size={12} className="spin" /> Fetching from Analytics API...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles size={12} /> Generate / Pull Now
-                        </>
-                      )}
-                    </button>
-                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    {/* Translation Tab Toggle if translated_text exists */}
+                    {callDetailData.translated_text && (
+                      <div style={{ display: "flex", gap: "4px", background: "#F1F5F9", padding: "2px", borderRadius: "6px" }}>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTranscriptTab("original")}
+                          style={{
+                            border: "none",
+                            background: activeTranscriptTab === "original" ? "#FFFFFF" : "transparent",
+                            boxShadow: activeTranscriptTab === "original" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                            borderRadius: "4px",
+                            padding: "3px 8px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            color: activeTranscriptTab === "original" ? "#0F172A" : "#64748B",
+                          }}
+                        >
+                          Original
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveTranscriptTab("translated")}
+                          style={{
+                            border: "none",
+                            background: activeTranscriptTab === "translated" ? "#FFFFFF" : "transparent",
+                            boxShadow: activeTranscriptTab === "translated" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                            borderRadius: "4px",
+                            padding: "3px 8px",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "3px",
+                            color: activeTranscriptTab === "translated" ? "#4F46E5" : "#64748B",
+                          }}
+                        >
+                          <Languages size={11} /> English Translation
+                        </button>
+                      </div>
+                    )}
+
+                    {callDetailData.transcript_status !== "ready" && (
+                      <button
+                        onClick={() => handlePullTranscriptOnDemand(callDetailData.attempt_id)}
+                        disabled={fetchingTranscript}
+                        className="btn btn-secondary btn-sm"
+                        style={{ fontSize: "12px" }}
+                      >
+                        {fetchingTranscript ? (
+                          <>
+                            <RefreshCw size={12} className="spin" /> Fetching from Analytics API...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles size={12} /> Generate / Pull Now
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Rendered Dialogue Bubble Stream */}
-                {callDetailData.transcript_text ? (
+                {(activeTranscriptTab === "translated" && callDetailData.translated_text
+                  ? callDetailData.translated_text
+                  : callDetailData.transcript_text) ? (
                   <div
                     style={{
                       maxHeight: "260px",
@@ -866,7 +1338,10 @@ export default function CallsHistoryPage() {
                       marginBottom: "16px",
                     }}
                   >
-                    {callDetailData.transcript_text.split("\n").map((line: string, lIdx: number) => {
+                    {(activeTranscriptTab === "translated" && callDetailData.translated_text
+                      ? callDetailData.translated_text
+                      : callDetailData.transcript_text
+                    ).split("\n").map((line: string, lIdx: number) => {
                       const isAssistant = line.startsWith("Agent:") || line.startsWith("assistant:");
                       return (
                         <div

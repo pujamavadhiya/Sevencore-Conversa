@@ -18,6 +18,14 @@ from apps.calls.history_views import (
     HistorySingleCallsView,
     HistoryCallDetailView,
     HistoryCallTranscriptView,
+    HistoryLiveAttemptsView,
+    HistoryLiveInteractionsView,
+    HistoryCallFullView,
+    HistoryInteractionTranscriptView,
+    HistoryInteractionRecordingView,
+    HistoryBackfillView,
+    HistoryBackfillStatusView,
+    HistoryQASampleView,
 )
 from apps.meetings.views import MeetingViewSet
 from apps.analytics.views import DashboardSummaryView, AnalyticsDetailView
@@ -55,7 +63,17 @@ urlpatterns = [
     path("api/v1/history/campaigns/<str:campaign_id>/users/<str:user_identifier>/", HistoryCampaignUserAttemptsView.as_view(), name="history-campaign-user-attempts"),
     path("api/v1/history/single-calls/", HistorySingleCallsView.as_view(), name="history-single-calls"),
     path("api/v1/history/calls/<str:attempt_id>/", HistoryCallDetailView.as_view(), name="history-call-detail"),
+    path("api/v1/history/calls/<str:attempt_id>/full/", HistoryCallFullView.as_view(), name="history-call-full"),
     path("api/v1/history/calls/<str:attempt_id>/transcript/", HistoryCallTranscriptView.as_view(), name="history-call-transcript"),
+
+    # On-demand Live Analytics & Audio Recordings (Sarvam Analytics API)
+    path("api/v1/history/live/attempts/", HistoryLiveAttemptsView.as_view(), name="history-live-attempts"),
+    path("api/v1/history/live/interactions/", HistoryLiveInteractionsView.as_view(), name="history-live-interactions"),
+    path("api/v1/history/interactions/<path:interaction_id>/transcript/", HistoryInteractionTranscriptView.as_view(), name="history-interaction-transcript"),
+    path("api/v1/history/interactions/<path:interaction_id>/recording/", HistoryInteractionRecordingView.as_view(), name="history-interaction-recording"),
+    path("api/v1/history/backfill/", HistoryBackfillView.as_view(), name="history-backfill"),
+    path("api/v1/history/backfill/<str:job_id>/", HistoryBackfillStatusView.as_view(), name="history-backfill-status"),
+    path("api/v1/history/qa/sample/", HistoryQASampleView.as_view(), name="history-qa-sample"),
     
     # Model router routes
     path("api/v1/", include(router.urls)),

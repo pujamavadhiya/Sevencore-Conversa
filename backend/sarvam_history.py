@@ -187,8 +187,13 @@ def derive_disposition(r: dict) -> tuple[str, str | None]:
 def normalize_webhook(p: dict) -> dict:
     """Handles both the instant-outbound webhook (status=...) and the campaign webhook."""
     vars_ = p.get("final_agent_variables") or p.get("agent_variables") or {}
-    conn = p.get("connectivity_status") or p.get("status")
-    comp = p.get("completion_status") or ("completed" if conn == "connected" else None)
+    raw_conn = p.get("connectivity_status") or p.get("status")
+    if raw_conn in ("completed", "connected"):
+        conn = "connected"
+        comp = p.get("completion_status") or "completed"
+    else:
+        conn = raw_conn
+        comp = p.get("completion_status") or ("completed" if conn == "connected" else None)
     meta = p.get("metadata") or (p.get("webhook_config") or {}).get("metadata") or {}
     campaign_id = (
         p.get("campaign_id")
@@ -667,18 +672,25 @@ def list_campaign_history():
     Clicking a campaign lets the UI display all calls for that specific campaign.
     """
     with db() as c:
+        # Ensure any campaign ID that exists in calls is represented in campaigns table
+        c.execute(
+            """INSERT OR IGNORE INTO campaigns (campaign_id, name, agent_id, created_at)
+               SELECT DISTINCT campaign_id, 'Campaign #' || campaign_id, COALESCE(agent_id, 'default'), COALESCE(MIN(executed_at), CURRENT_TIMESTAMP)
+               FROM calls
+               WHERE campaign_id IS NOT NULL AND campaign_id != ''"""
+        )
         rows = c.execute(
             """
           SELECT c.campaign_id, c.name, c.agent_id, c.start_timestamp, c.end_timestamp,
                  COUNT(k.attempt_id) AS total_attempts,
-                 COUNT(DISTINCT k.user_identifier) AS unique_users,
-                 COALESCE(SUM(k.connectivity_status='connected'), 0) AS connected,
-                 COALESCE(SUM(k.disposition='success'), 0) AS successful,
-                 COALESCE(SUM(k.disposition='followup'), 0) AS followups,
+                 COUNT(DISTINCT COALESCE(k.user_identifier, k.user_contact_masked)) AS unique_users,
+                 COALESCE(SUM(CASE WHEN k.connectivity_status IN ('connected', 'completed') OR k.disposition IN ('success', 'followup') OR (k.duration IS NOT NULL AND k.duration > 0) THEN 1 ELSE 0 END), 0) AS connected,
+                 COALESCE(SUM(CASE WHEN k.disposition='success' THEN 1 ELSE 0 END), 0) AS successful,
+                 COALESCE(SUM(CASE WHEN k.disposition='followup' THEN 1 ELSE 0 END), 0) AS followups,
                  MAX(k.executed_at) AS last_call_at
           FROM campaigns c
-          LEFT JOIN calls k ON k.campaign_id=c.campaign_id AND k.is_debug_call=0
-          GROUP BY c.campaign_id
+          LEFT JOIN calls k ON k.campaign_id=c.campaign_id AND COALESCE(k.is_debug_call, 0)=0
+          GROUP BY c.campaign_id, c.name, c.agent_id, c.start_timestamp, c.end_timestamp, c.created_at
           ORDER BY COALESCE(MAX(k.executed_at), c.created_at) DESC
         """
         ).fetchall()
@@ -785,10 +797,23 @@ app = FastAPI(
 )
 app.include_router(router)
 
+# Mount On-demand analytics & recording router
+try:
+    from sarvam_ondemand import router as ondemand_router, init_ondemand_db
+    init_ondemand_db()
+    app.include_router(ondemand_router)
+except Exception as _ondemand_err:
+    log.warning("Could not mount ondemand_router: %s", _ondemand_err)
+
 
 @app.on_event("startup")
 async def _startup():
     init_db()
+    try:
+        from sarvam_ondemand import init_ondemand_db
+        init_ondemand_db()
+    except Exception:
+        pass
     start_workers(agent_ids=[DEFAULT_AGENT_ID])
 
 

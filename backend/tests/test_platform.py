@@ -399,3 +399,112 @@ class SevencoreConversaBackendTests(TestCase):
         camp.refresh_from_db()
         self.assertEqual(camp.total_contacts, 2)
         self.assertGreater(camp.estimated_cost_inr, 0)
+
+    def test_ondemand_history_endpoints(self):
+        from rest_framework.test import APIClient
+        from unittest.mock import patch, AsyncMock
+        import sarvam_ondemand
+        from sarvam_history import db, ingest_webhook
+
+        client = APIClient()
+
+        # Ingest a mock call into sqlite DB
+        mock_payload = {
+            "attempt_id": "att_ondemand_test_99",
+            "campaign_id": "camp_test_99",
+            "user_identifier": "usr_99",
+            "phone": "+919876543210",
+            "status": "completed",
+            "connectivity_status": "connected",
+            "disposition": "success",
+            "duration": 42,
+            "interaction_id": "20261029/9f1c-test-interaction",
+            "timestamp": "2026-10-29T10:00:00Z"
+        }
+        ingest_webhook(mock_payload)
+
+        # 1. Test live attempts query (mock live_attempts to avoid live HTTP call to Sarvam)
+        async def mock_live_attempts(**kwargs):
+            return {
+                "total": 1,
+                "limit": 20,
+                "offset": 0,
+                "items": [
+                    {
+                        "attempt_id": "att_live_1",
+                        "campaign_id": "camp_live",
+                        "status": "connected",
+                        "duration": 35,
+                        "user_contact": "+91 98765 ***10"
+                    }
+                ]
+            }
+
+        with patch("apps.calls.history_views.live_attempts", side_effect=mock_live_attempts):
+            resp_attempts = client.get("/api/v1/history/live/attempts/?status=connected")
+            self.assertEqual(resp_attempts.status_code, 200)
+            data = resp_attempts.json()
+            self.assertEqual(len(data["items"]), 1)
+            # Verify PII masking
+            self.assertEqual(data["items"][0]["user_contact"], "+91 98765 ***10")
+
+        # 2. Test live interactions query
+        async def mock_live_interactions(**kwargs):
+            return {
+                "total": 1,
+                "limit": 20,
+                "offset": 0,
+                "items": [
+                    {
+                        "interaction_id": "20261029/live-int-1",
+                        "agent_id": "agent_test",
+                        "status": "completed",
+                        "duration": 50,
+                        "start_time": "2026-10-29T10:00:00Z"
+                    }
+                ]
+            }
+
+        with patch("apps.calls.history_views.live_interactions", side_effect=mock_live_interactions):
+            resp_interactions = client.get("/api/v1/history/live/interactions/")
+            self.assertEqual(resp_interactions.status_code, 200)
+            data_int = resp_interactions.json()
+            self.assertEqual(len(data_int["items"]), 1)
+            self.assertEqual(data_int["items"][0]["interaction_id"], "20261029/live-int-1")
+
+        # 3. Test QA sampling endpoint
+        resp_qa = client.get("/api/v1/history/qa/sample/?n=10")
+        self.assertEqual(resp_qa.status_code, 200)
+        qa_data = resp_qa.json()
+        self.assertIsInstance(qa_data, list)
+
+        # 4. Test joined full call endpoint
+        async def mock_call_full(attempt_id, refresh=False):
+            return {
+                "attempt_id": attempt_id,
+                "call_type": "campaign",
+                "campaign_id": "camp_test_99",
+                "duration": 42,
+                "connectivity_status": "connected",
+                "user_contact_masked": "+91 98765 ***10",
+                "transcript_status": "ready",
+                "transcript_text": "Agent: Namaste\nCustomer: Haan boliye",
+                "translated_text": "Agent: Hello\nCustomer: Yes please speak",
+                "recording_url": f"http://localhost:8000/api/v1/history/interactions/20261029%2F9f1c-test-interaction/recording/"
+            }
+
+        with patch("apps.calls.history_views.call_full", side_effect=mock_call_full):
+            resp_full = client.get("/api/v1/history/calls/att_ondemand_test_99/full/")
+            self.assertEqual(resp_full.status_code, 200)
+            full_data = resp_full.json()
+            self.assertEqual(full_data["attempt_id"], "att_ondemand_test_99")
+            self.assertIn("recording_url", full_data)
+            self.assertIn("translated_text", full_data)
+
+        # 5. Test backfill trigger endpoint
+        resp_backfill = client.post("/api/v1/history/backfill/", {
+            "start": "2026-10-28T00:00:00Z",
+            "end": "2026-10-29T00:00:00Z"
+        }, format="json")
+        self.assertEqual(resp_backfill.status_code, 202)
+        self.assertIn("job_id", resp_backfill.json())
